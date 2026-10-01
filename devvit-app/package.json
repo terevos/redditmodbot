@@ -1,0 +1,27 @@
+{
+  "private": true,
+  "name": "redditmodbot",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild --bundle --log-level=warning --sourcemap=linked --target=es2023 --format=cjs --outdir=dist/server --platform=node src/server/index.ts",
+    "clean": "rm -rf dist/",
+    "login": "devvit login",
+    "playtest": "devvit playtest",
+    "test": "npm run test:types && npm run test:unit && npm run build",
+    "test:types": "tsc --noEmit",
+    "test:unit": "node --experimental-strip-types --no-warnings=ExperimentalWarning --test 'src/**/*.test.ts'",
+    "upload": "npm run clean && npm run build && devvit upload",
+    "watch": "npm run build -- --watch=forever"
+  },
+  "devDependencies": {
+    "@devvit/web": "0.14.6",
+    "@types/node": "22.20.4",
+    "devvit": "0.14.6",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

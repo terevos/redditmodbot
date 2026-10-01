@@ -1,0 +1,36 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "redditmodbot",
+  "server": {
+    "externalEndpoints": {
+      "rpc": {
+        "endpoint": "/external/rpc",
+        "scopes": ["global"]
+      }
+    }
+  },
+  "permissions": {
+    "reddit": true,
+    "redis": true
+  },
+  "triggers": {
+    "onAppInstall": "/internal/on/app/install",
+    "onAppUpgrade": "/internal/on/app/upgrade",
+    "onModAction": "/internal/on/mod-action"
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "ReformedBot: show endpoint URL",
+        "description": "The DEVVIT_URL to put in the bot's slack.ini for this subreddit.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/endpoint-url"
+      }
+    ]
+  },
+  "scripts": {
+    "dev": "npm run watch",
+    "build": "npm run build"
+  }
+}
