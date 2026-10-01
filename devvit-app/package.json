@@ -1,5 +1,6 @@
 {
   "private": true,
+  "license": "GPL-3.0-only",
   "name": "redditmodbot",
   "version": "0.0.0",
   "type": "module",

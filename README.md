@@ -1,4 +1,4 @@
-# ReformedBot v2
+# RedditModBot
 
 A Slack bot that surfaces Reddit moderation activity directly in Slack, so mods can discuss and triage it there rather than in the Reddit modqueue.
 
@@ -310,3 +310,9 @@ what the exports contain:
   }
 }
 ```
+
+---
+
+## License
+
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
