@@ -145,7 +145,7 @@ npm test                  # type-check, unit tests, build
 npm run upload            # builds and uploads the app
 ```
 
-1. **Pick the app name.** `name` in `devvit-app/devvit.json` (`redditmodbot`) becomes the app's Reddit account and must be unique on the platform; change it before the first upload if it is taken.
+1. **Pick the app name.** `name` in `devvit-app/devvit.json` (`reformedautomodv2`) becomes the app's Reddit account and must be unique on the platform; change it before the first upload if it is taken. `devvit.wcgw.json` is the same app under a second name (`wcgwautomodv2`), uploaded with `npm run upload:wcgw`.
 2. **Get external endpoints enabled.** The bot calls the app from outside Reddit, which uses Devvit's *external endpoints* — an experimental, limited-access feature that Reddit has to approve for the app. Nothing below works until that is granted.
 3. **Install the app** on each subreddit, from the app's page on developers.reddit.com. It needs full moderator permissions, mail included.
 4. **Create a managed app token** in the app's Developer Settings. That is `DEVVIT_TOKEN`; one token covers every install of that app.
@@ -169,13 +169,13 @@ DEVVIT_TOKEN = devvit_at_your-managed-token-here
 MODQUEUE_CHANNEL = mod_actions
 MODMAIL_CHANNEL  = mod_mail
 CONTROLS         = vote
-DEVVIT_URL       = https://redditmodbot-2th52-external.devvit.net/external/
+DEVVIT_URL       = https://reformedautomodv2-2th52-external.devvit.net/external/
 
 [Subreddit:whatcouldgowrong]
 MODQUEUE_CHANNEL = wcgw_reports
 MODMAIL_CHANNEL  = wcgw_mail
 CONTROLS         = vote, actions
-DEVVIT_URL       = https://redditmodbot-2qh1i-external.devvit.net/external/
+DEVVIT_URL       = https://wcgwautomodv2-2qh1i-external.devvit.net/external/
 
 [Mods]
 U0123456789 = reddit_username
