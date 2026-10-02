@@ -119,7 +119,7 @@ Only Slack users listed in the `[Mods]` section of `slack.ini` can use a card's 
 
 - Python 3.13
 - `requests` and `slack-bolt` (see `requirements.txt`)
-- Node 22 or newer, for building and uploading the Devvit app
+- Node 24 or newer, for building and uploading the Devvit app
 
 Install with pipenv:
 
@@ -148,7 +148,7 @@ npm run upload            # builds and uploads the app
 1. **Pick the app name.** `name` in `devvit-app/devvit.json` (`redditmodbot`) becomes the app's Reddit account and must be unique on the platform; change it before the first upload if it is taken.
 2. **Get external endpoints enabled.** The bot calls the app from outside Reddit, which uses Devvit's *external endpoints* — an experimental, limited-access feature that Reddit has to approve for the app. Nothing below works until that is granted.
 3. **Install the app** on each subreddit, from the app's page on developers.reddit.com. It needs full moderator permissions, mail included.
-4. **Create a managed app token** in the app's Developer Settings. That is `DEVVIT_TOKEN`; one token covers every install.
+4. **Create a managed app token** in the app's Developer Settings. That is `DEVVIT_TOKEN`; one token covers every install of that app.
 5. **Find each install's URL**: in the subreddit's mod menu, *ReformedBot: show endpoint URL*. That is the subreddit's `DEVVIT_URL`. (It is also logged when the app is installed or upgraded: `npx devvit logs <subreddit>`.)
 
 `npm run playtest` runs the app against a test subreddit with live reload.
@@ -186,6 +186,8 @@ UZYXWVUTSRQ = wcgw_only_mod
 ```
 
 One `[Subreddit:<name>]` section per subreddit; add a section to add a subreddit. Each is reached through the Devvit app's install on that subreddit, at its `DEVVIT_URL`. At startup the bot asks each install which subreddit it serves, and refuses to run if a URL has been put under the wrong section. Reddit sees the bot's actions as the app's own account.
+
+To act on one subreddit as a different Reddit account, upload the app a second time under another name (a copy of `devvit.json` with its own `name`, passed as `devvit upload --config <file>`), install that app there, and give the subreddit's section its own `DEVVIT_TOKEN` — a token belongs to one app, and a section's token wins over `[Default]`'s.
 
 `CONTROLS` picks which controls that subreddit's cards carry: `vote` for the Cast vote… dropdown on report cards, `actions` for Archive/Unarchive on modmail cards, comma-separated for both. Omit the key for `vote`. A `CONTROLS` in `[Default]` applies to every subreddit that does not set its own. The Done button is not part of the choice — every card has one.
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
-  "name": "reformedautomodv2",
+  "name": "wcgwautomodv2",
   "server": {
     "dir": "dist/server",
     "entry": "index.cjs",
@@ -38,6 +38,6 @@
     "build": "npm run build"
   },
   "dev": {
-    "subreddit": "reformedautomodv_dev2"
+    "subreddit": "wcgwautomodv2_dev2"
   }
 }

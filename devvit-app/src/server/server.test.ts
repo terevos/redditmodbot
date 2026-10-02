@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import {once} from 'node:events'
+import {createServer} from 'node:http'
 import {test} from 'node:test'
 import type {OnModActionRequest} from '@devvit/web/shared'
 import {BadRequest, toConversation, toThing} from './ops.ts'
 import {resolutionFromModAction} from './resolutions.ts'
-import {routeRpc} from './server.ts'
+import {onReq, routeRpc} from './server.ts'
 
 type Item = Parameters<typeof toThing>[0]
 
@@ -133,4 +135,20 @@ test('an unknown op is a bad request, including an inherited property name', asy
 test('a missing argument is a bad request before Reddit is asked', async () => {
   await assert.rejects(routeRpc({op: 'item', args: {kind: 'comment'}}), BadRequest)
   await assert.rejects(routeRpc({op: 'item', args: {id: 'abc', kind: 'post'}}), BadRequest)
+})
+
+test('an install succeeds even when the external URL cannot be read', async () => {
+  // Outside Devvit there is no context, so reading the URL throws — the same
+  // shape as an app that has not been granted external endpoints.
+  const server = createServer(onReq).listen(0)
+  await once(server, 'listening')
+  const {port} = server.address() as {port: number}
+  try {
+    for (const path of ['/internal/on/app/install', '/internal/on/app/upgrade', '/internal/menu/endpoint-url']) {
+      const rsp = await fetch(`http://localhost:${port}${path}`, {method: 'POST', body: '{}'})
+      assert.equal(rsp.status, 200, path)
+    }
+  } finally {
+    server.close()
+  }
 })

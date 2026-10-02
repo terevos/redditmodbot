@@ -34,7 +34,7 @@ pip install -r requirements.txt
 One config file is required before running:
 - **`slack.ini`** — Slack tokens, the Devvit token, and per-subreddit channel/URL/mod config (copy from `slack.ini.example`)
 
-The Devvit app has its own toolchain (Node 22+):
+The Devvit app has its own toolchain (Node 24+):
 ```
 cd devvit-app && npm install
 npm test          # tsc, node --test, esbuild bundle
@@ -88,7 +88,7 @@ Slack  <-- Socket Mode -->  reformed_listener.py / reddit_actions.py
 
 Things that are different from PRAW, and bite if forgotten:
 
-- **One session per feed, not per account.** An install only acts on its own subreddit, so `_startup()` builds a `DevvitReddit` per feed from its `DEVVIT_URL`. It asks each install which subreddit it serves (`served_subreddit()`): a mismatch is a `SystemExit` (swapped URLs would cross-post two subreddits' queues), while an unreachable install is only a warning, like any other outage. A missing `DEVVIT_URL` or `DEVVIT_TOKEN` is a `SystemExit` before anything is contacted.
+- **One session per feed, not per account.** An install only acts on its own subreddit, so `_startup()` builds a `DevvitReddit` per feed from its `DEVVIT_URL`. It asks each install which subreddit it serves (`served_subreddit()`): a mismatch is a `SystemExit` (swapped URLs would cross-post two subreddits' queues), while an unreachable install is only a warning, like any other outage. A missing `DEVVIT_URL` or `DEVVIT_TOKEN` is a `SystemExit` before anything is contacted. A token belongs to one app, so a feed's own `DEVVIT_TOKEN` (`Feed.devvit_token`) wins over `[Default]`'s — that is how one subreddit is served by a second upload of the app, acting as a different Reddit account.
 - **`approved_by` / `banned_by` do not exist in Devvit's models.** The app records them itself: the `onModAction` trigger writes `resolution:<id>` to the install's Redis for every approve/remove/spam, and the `item` op reads it back. For an action nothing recorded (it predates the install, or the trigger was missed) the op falls back to the mod log, and caches a miss for 10 minutes so the reconcile pass's re-asking does not become a mod-log listing per poll. On the Python side neither field is in a modqueue listing, so reading one on a listed item costs a fetch.
 - **Objects are lazy, like PRAW's.** `reddit.comment(id=…)` makes no request until an attribute is read; a listed modmail conversation has no `mod_actions` until read, which is the per-conversation request `sync_archived_conversations` is written to avoid.
 - **User reports carry no counts.** Devvit gives report reasons only, so every `user_reports` entry is `(reason, 1)`.
@@ -347,6 +347,7 @@ Modmail **Reply / Mute / Warn / Ban** are dormant in the same way, and were befo
 | `[Subreddit:<name>]` | `CONTROLS` | Which card controls that subreddit gets: `vote`, `actions`, comma-separated. Default `vote` (see [Card controls](#card-controls)) |
 | `[Default]` | `CONTROLS` | `CONTROLS` for every feed that does not set its own |
 | `[Subreddit:<name>]` | `DEVVIT_URL` | External root URL of the Devvit app's install on that subreddit. Required |
+| `[Subreddit:<name>]` | `DEVVIT_TOKEN` | Token for a subreddit served by a second Devvit app (its own Reddit account); wins over `[Default]`'s |
 | `[Mods]` | `SLACK_USER_ID = reddit_name` | Moderators authorized in every feed |
 | `[Mods:<name>]` | `SLACK_USER_ID = reddit_name` | Moderators authorized for that subreddit only |
 | `[Channels]` | `MODQUEUE_CHANNEL` / `MODMAIL_CHANNEL` | Legacy single-subreddit form; read only when no `[Subreddit:...]` section exists, paired with `[Default] SUBREDDIT` (default `reformed`) |

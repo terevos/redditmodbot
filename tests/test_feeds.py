@@ -95,6 +95,12 @@ def test_each_feed_names_its_own_devvit_install() -> None:
     assert [f.devvit_url for f in feeds] == ["https://bot-aaa-external.devvit.net/external/", ""]
 
 
+def test_a_feed_may_name_its_own_devvit_token() -> None:
+    """A subreddit served by a second Devvit app has that app's token."""
+    feeds = L._load_feeds(parse(TWO_SUBS + "DEVVIT_TOKEN = devvit_at_wcgw\n"))
+    assert [f.devvit_token for f in feeds] == ["", "devvit_at_wcgw"]
+
+
 class FakeSession:
     """Stands in for a DevvitReddit: answers the startup identity check."""
 
@@ -168,6 +174,25 @@ def test_startup_refuses_to_run_without_a_devvit_token(startup: Any, monkeypatch
 
     with pytest.raises(SystemExit, match=r"DEVVIT_TOKEN"):
         L._startup()
+
+
+def test_startup_uses_a_feeds_own_token_over_the_default(startup: Any) -> None:
+    built = startup([("reformed", "https://a/external/"), ("whatcouldgowrong", "https://b/external/")])
+    built[1].devvit_token = "devvit_at_wcgw"
+
+    L._startup()
+
+    assert [f.reddit.session.token for f in built] == ["devvit_at_test", "devvit_at_wcgw"]
+
+
+def test_startup_needs_no_default_token_when_every_feed_has_its_own(startup: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    built = startup([("reformed", "https://a/external/")])
+    built[0].devvit_token = "devvit_at_own"
+    monkeypatch.setattr(L, "devvit_token", "")
+
+    L._startup()
+
+    assert built[0].reddit.session.token == "devvit_at_own"
 
 
 def test_startup_refuses_a_url_that_belongs_to_another_subreddit(startup: Any) -> None:

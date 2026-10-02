@@ -159,7 +159,7 @@ class Feed:
     status message.
     """
 
-    def __init__(self, subreddit: str, raw_modqueue_channel: Optional[str], raw_modmail_channel: Optional[str], mods: Optional[Dict[str, str]] = None, controls: Optional[str] = None, devvit_url: Optional[str] = None) -> None:
+    def __init__(self, subreddit: str, raw_modqueue_channel: Optional[str], raw_modmail_channel: Optional[str], mods: Optional[Dict[str, str]] = None, controls: Optional[str] = None, devvit_url: Optional[str] = None, devvit_token: Optional[str] = None) -> None:
         """Build a feed from its ``slack.ini`` configuration.
 
         Args:
@@ -173,9 +173,13 @@ class Feed:
                 ``RedditActions``, which builds the cards.
             devvit_url: External root URL of the Devvit app's install on this
                 subreddit — where every Reddit call for this feed goes.
+            devvit_token: Managed app token for that install, when this
+                subreddit is served by a different Devvit app (and so a
+                different Reddit account) from the ``[Default]`` one.
         """
         self.subreddit: str = subreddit
         self.devvit_url: str = (devvit_url or "").strip()
+        self.devvit_token: str = (devvit_token or "").strip()
         self.controls: frozenset = RedditActions.parse_controls(controls)
         # Raw values are kept so a channel that could not be resolved at startup
         # (Slack unreachable, bot not yet invited) can be retried by the poll
@@ -281,6 +285,7 @@ def _load_feeds(cfg: configparser.ConfigParser) -> List[Feed]:
             _mods_for_subreddit(cfg, name),
             _controls_for(cfg, section),
             cfg.get(section, 'DEVVIT_URL', fallback=None),
+            cfg.get(section, 'DEVVIT_TOKEN', fallback=None),
         ))
 
     if cfg.has_section('Channels'):
@@ -295,6 +300,7 @@ def _load_feeds(cfg: configparser.ConfigParser) -> List[Feed]:
                 _mods_for_subreddit(cfg, name),
                 _controls_for(cfg, 'Channels'),
                 cfg.get('Channels', 'DEVVIT_URL', fallback=None),
+                cfg.get('Channels', 'DEVVIT_TOKEN', fallback=None),
             ))
     return feeds
 
@@ -389,13 +395,16 @@ def _startup() -> None:
     # One session per feed: the Devvit app is installed per subreddit, and an
     # install only ever acts on its own. A missing URL or token is a config
     # mistake to report, not an outage to ride out.
-    if not devvit_token:
-        raise SystemExit("slack.ini is missing [Default] DEVVIT_TOKEN — a managed app token from the Devvit app's Developer Settings")
+    # A token belongs to an app, so a feed served by a second app (its own
+    # Reddit account) names its own; every other feed shares [Default]'s.
+    tokenless = [feed.label for feed in feeds if not (feed.devvit_token or devvit_token)]
+    if tokenless:
+        raise SystemExit(f"slack.ini has no DEVVIT_TOKEN for {', '.join(tokenless)} — a managed app token from the Devvit app's Developer Settings, in [Default] or in the subreddit's own section")
     unreachable = [feed.label for feed in feeds if not feed.devvit_url]
     if unreachable:
         raise SystemExit(f"slack.ini has no DEVVIT_URL for {', '.join(unreachable)} — the Devvit app's install on that subreddit reports it (see README)")
     for feed in feeds:
-        session = DevvitReddit(feed.devvit_url, devvit_token)
+        session = DevvitReddit(feed.devvit_url, feed.devvit_token or devvit_token)
         # The wrong URL in a section would post one subreddit's queue into
         # another's channels, so ask the install who it is. Not being able to
         # ask is an outage like any other; a wrong answer is a config mistake.

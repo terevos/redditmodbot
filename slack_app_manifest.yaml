@@ -1,11 +1,11 @@
 display_information:
-  name: ReformedBot
-  description: Moderation bot for r/reformed — posts mod queue and modmail to Slack with inline action buttons.
+  name: RedditModBot
+  description: Moderation bot for r/reformed and r/whatcouldgowrong — posts mod queue and modmail to Slack with inline action buttons.
   background_color: "#2c2d30"
 
 features:
   bot_user:
-    display_name: ReformedBot
+    display_name: RedditModBot
     always_online: true
 
 settings:
@@ -14,7 +14,7 @@ settings:
     is_enabled: true
   event_subscriptions:
     bot_events:
-      - app_mention        # @ReformedBot mentions
+      - app_mention        # @RedditModBot mentions
   org_deploy_enabled: false
   token_rotation_enabled: false
 oauth_config:

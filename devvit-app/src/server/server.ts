@@ -60,14 +60,25 @@ async function route(
     case Route.OnAppInstall:
     case Route.OnAppUpgrade:
       // The one place the URL is written down without a mod asking for it.
-      console.log(`external URL: ${await externalUrl()}`)
+      // Answering anything but 200 here fails the install itself, and the URL
+      // is unreadable until external endpoints are enabled for the app.
+      console.log(`external URL: ${await describeExternalUrl()}`)
       writeJson<TriggerResponse>(200, {}, rspMsg)
       return
     case Route.MenuEndpointUrl:
-      writeJson<UiResponse>(200, {showToast: {text: await externalUrl()}}, rspMsg)
+      writeJson<UiResponse>(200, {showToast: {text: await describeExternalUrl()}}, rspMsg)
       return
     default:
       writeJson<RpcError>(404, {error: 'not found', status: 404}, rspMsg)
+  }
+}
+
+/** The install's external URL, or why it could not be read. Never throws. */
+async function describeExternalUrl(): Promise<string> {
+  try {
+    return await externalUrl()
+  } catch (err) {
+    return `unavailable (${err instanceof Error ? err.message : err})`
   }
 }
 

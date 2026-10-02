@@ -13,7 +13,9 @@ POLL_INTERVAL = 30
 
 # Managed app token for the Devvit app that reaches Reddit on the bot's behalf
 # (devvit_at_...). Created in the app's Developer Settings; one token covers
-# every subreddit the app is installed on.
+# every subreddit the app is installed on. A subreddit served by a second
+# Devvit app (to act there as a different Reddit account) sets its own
+# DEVVIT_TOKEN in its [Subreddit:<name>] section, which wins over this one.
 DEVVIT_TOKEN = devvit_at_your-managed-token-here
 
 # One [Subreddit:<name>] section per subreddit the bot serves. Each gets its
