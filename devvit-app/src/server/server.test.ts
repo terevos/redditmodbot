@@ -3,7 +3,7 @@ import {once} from 'node:events'
 import {createServer} from 'node:http'
 import {test} from 'node:test'
 import type {OnModActionRequest} from '@devvit/web/shared'
-import {BadRequest, toConversation, toThing} from './ops.ts'
+import {BadRequest, ENABLED_OPS, ops, toConversation, toThing} from './ops.ts'
 import {resolutionFromModAction} from './resolutions.ts'
 import {onReq, routeRpc} from './server.ts'
 
@@ -151,4 +151,18 @@ test('an install succeeds even when the external URL cannot be read', async () =
   } finally {
     server.close()
   }
+})
+
+test('every op that writes to Reddit is refused, apart from archiving modmail', async () => {
+  const writes = ['approve', 'remove', 'ignore_reports', 'distinguish', 'reply', 'ban', 'unban', 'modmail_reply', 'modmail_mute', 'modmail_create']
+  for (const op of writes) {
+    assert.ok(Object.hasOwn(ops, op), `${op} is still written`)
+    // Refused before its arguments are even looked at.
+    await assert.rejects(routeRpc({op}), /is disabled in this app/, op)
+  }
+  assert.deepEqual(
+    [...ENABLED_OPS].filter(op => !Object.hasOwn(ops, op)),
+    [],
+    'every enabled op exists',
+  )
 })

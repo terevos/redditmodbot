@@ -93,6 +93,7 @@ Things that are different from PRAW, and bite if forgotten:
 - **Objects are lazy, like PRAW's.** `reddit.comment(id=…)` makes no request until an attribute is read; a listed modmail conversation has no `mod_actions` until read, which is the per-conversation request `sync_archived_conversations` is written to avoid.
 - **User reports carry no counts.** Devvit gives report reasons only, so every `user_reports` entry is `(reason, 1)`.
 - **Failures are `DevvitError`; a 5xx is `ServerError`**, which `_is_server_error` recognises by status and by name. The app answers 502 for anything Reddit throws, so a Reddit outage still shortens the next poll.
+- **Only `ENABLED_OPS` run.** Devvit's Reddit permission is all-or-nothing, so the app narrows itself: `routeRpc` refuses any op not in `ENABLED_OPS` (`ops.ts`) — the reads plus modmail archive/unarchive. Every op that posts, comments, removes, bans or messages is still written but answers 400 "disabled in this app"; reviving a dormant control means adding its op there and re-uploading.
 - **Rate limit: 5 requests/second per install.** `DevvitReddit.call` spaces calls under one lock, shared by the poll thread and the Slack handlers.
 - **External endpoints are experimental and limited-access** on Devvit; the `rpc` endpoint is declared with `"scopes": ["global"]`, which is what admits a long-lived managed token.
 

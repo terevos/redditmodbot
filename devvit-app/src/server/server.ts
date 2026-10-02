@@ -6,7 +6,7 @@ import type {
   TriggerResponse,
   UiResponse,
 } from '@devvit/web/shared'
-import {BadRequest, externalUrl, ops} from './ops.ts'
+import {BadRequest, ENABLED_OPS, externalUrl, ops} from './ops.ts'
 import {recordModAction} from './resolutions.ts'
 import type {RpcError, RpcRequest} from './wire.ts'
 
@@ -86,6 +86,9 @@ export async function routeRpc(req: Readonly<RpcRequest>): Promise<PartialJsonVa
   const op = typeof req?.op === 'string' ? ops[req.op] : undefined
   if (!op || !Object.hasOwn(ops, req.op)) {
     throw new BadRequest(`unknown op ${JSON.stringify(req?.op)}`)
+  }
+  if (!ENABLED_OPS.has(req.op)) {
+    throw new BadRequest(`op ${JSON.stringify(req.op)} is disabled in this app`)
   }
   return (await op(req.args ?? {})) as PartialJsonValue
 }

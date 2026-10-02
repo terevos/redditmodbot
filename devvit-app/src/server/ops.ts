@@ -142,6 +142,24 @@ export function toConversation(
   return out
 }
 
+/**
+ * The ops a caller may actually run. A leaked token can do whatever the app
+ * can, so the app can do only what the bot uses: read the queue and modmail,
+ * and archive or unarchive a conversation. Everything that posts, comments,
+ * removes, bans or messages stays written below but is refused — the bot's
+ * matching controls are dormant too, and reviving one is adding its op here.
+ */
+export const ENABLED_OPS: ReadonlySet<string> = new Set([
+  'info',
+  'moderators',
+  'modqueue',
+  'item',
+  'modmail_conversations',
+  'modmail_conversation',
+  'modmail_archive',
+  'modmail_unarchive',
+])
+
 export const ops: {[name: string]: Op} = {
   /** Liveness and identity: which install answered, and where it lives. */
   async info() {
