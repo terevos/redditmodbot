@@ -137,6 +137,8 @@ pip install -r requirements.txt
 
 The app is the bot's Reddit backend. It needs setting up once, and installing once per subreddit.
 
+Its own README, [`devvit-app/README.md`](devvit-app/README.md), is the moderator-facing description Reddit shows on the app's page and reads at app review.
+
 ```
 cd devvit-app
 npm install
