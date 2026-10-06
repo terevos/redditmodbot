@@ -178,8 +178,8 @@ test('an install succeeds even when the external URL cannot be read', async () =
   }
 })
 
-test('every op that writes to Reddit is refused, apart from archiving modmail', async () => {
-  const writes = ['approve', 'remove', 'ignore_reports', 'distinguish', 'reply', 'ban', 'unban', 'modmail_reply', 'modmail_mute', 'modmail_create']
+test('every op that writes to Reddit is refused', async () => {
+  const writes = ['approve', 'remove', 'ignore_reports', 'distinguish', 'reply', 'ban', 'unban', 'modmail_reply', 'modmail_mute', 'modmail_create', 'modmail_archive', 'modmail_unarchive']
   for (const op of writes) {
     assert.ok(Object.hasOwn(ops, op), `${op} is still written`)
     // Refused before its arguments are even looked at.

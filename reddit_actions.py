@@ -266,13 +266,14 @@ class RedditActions:
     # Card controls
     #
     # Which interactive controls a card carries, set per feed by ``CONTROLS``
-    # in slack.ini. A team that decides together wants the vote dropdown; a
-    # team that also wants to act from Slack wants ``actions``, which adds the
-    # modmail Archive/Unarchive controls. Either, both, or neither.
+    # in slack.ini. There is one: ``vote``, the vote dropdown and its tally.
     #
-    # ``actions`` used to put a Take action… dropdown on modqueue cards as well
-    # (approve/remove/warn/ban on Reddit for real). That was withdrawn — see
-    # _build_take_action_element, which is kept but no longer emitted.
+    # ``actions`` is still parsed and now adds nothing. It used to put controls
+    # on cards that acted on Reddit for real — a Take action… dropdown on
+    # modqueue cards, then Archive/Unarchive on modmail cards — and both were
+    # withdrawn: the bot reads Reddit and never writes to it, and anything done
+    # to Reddit is done on Reddit. The builders and handlers behind them are
+    # kept, dormant, and ``actions_enabled`` is the gate they still check.
     #
     # The Done button is not one of these: every card gets one, so an item can
     # always be closed out in Slack whatever else it offers.
@@ -305,6 +306,8 @@ class RedditActions:
         if raw is None:
             return frozenset(cls.DEFAULT_CONTROLS)
         names = [n.strip().lower() for n in raw.replace(",", " ").split()]
+        if cls.CONTROL_ACTIONS in names:
+            logging.warning("CONTROLS value 'actions' no longer adds anything — the bot is read-only, so Reddit actions are taken on Reddit")
         unknown = [n for n in names if n not in cls.VALID_CONTROLS]
         if unknown:
             logging.warning(f"Ignoring unknown CONTROLS value(s) {', '.join(unknown)} — valid: {', '.join(cls.VALID_CONTROLS)}")
@@ -358,11 +361,11 @@ class RedditActions:
 
     @property
     def actions_enabled(self) -> bool:
-        """Return True if this feed's modmail cards carry Archive/Unarchive.
+        """Return True if this feed is configured for ``actions``.
 
-        These act on Reddit for the whole mod team rather than on Slack alone,
-        which is why they are opt-in. Modqueue cards carry no Reddit action of
-        their own — see the note on :attr:`CONTROL_ACTIONS`.
+        Nothing live reads this any more: no card carries a control that acts
+        on Reddit. It is the gate the dormant handlers still check — see the
+        note on :attr:`CONTROL_ACTIONS`.
         """
         return self.CONTROL_ACTIONS in self.controls
 
@@ -803,18 +806,19 @@ class RedditActions:
                 return display.split(" ", 1)[0]
         return ""
 
-    def modmail_control_elements(self, conv_id: str, author: str) -> List[Dict[str, Any]]:
+    def modmail_control_elements(self, conv_id: str, author: str, include_archive: bool = False) -> List[Dict[str, Any]]:
         """Return the control elements for an open modmail card.
 
-        Done is always there — it resolves the thread in Slack alone. Archive
-        is offered only on a feed configured for ``actions``, because it
-        archives the conversation on Reddit for every mod, not just in Slack.
+        Done is the only one — it resolves the thread in Slack alone. The
+        Archive button, which archived the conversation on Reddit for every
+        mod, is dormant: nothing passes *include_archive*, and it is here so a
+        revival is one argument rather than a rewrite.
 
         Every place that rebuilds an open modmail card uses this, so a card that
         goes done → reopened comes back with the same controls it started with.
         """
         elements: List[Dict[str, Any]] = []
-        if self.actions_enabled:
+        if include_archive:
             elements.append({
                 "type": "button",
                 "action_id": "modmail_action",

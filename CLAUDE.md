@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ReformedBot is a Slack bot that surfaces Reddit moderation activity (modqueue reports and modmail) directly in Slack. Mods triage from Slack with interactive Block Kit controls — a vote dropdown, a Done button, and a Re-open dropdown — while the bot keeps Slack's state in step with what actually happens on Reddit.
 
+**It is read-only and one-way: Reddit to Slack.** No control in Slack acts on Reddit and the Devvit app enables no op that writes; every moderation action is taken on Reddit itself. The controls that once did write (the modqueue Take action… dropdown, modmail Archive/Unarchive) are dormant, not deleted.
+
 It serves any number of subreddits at once. Each is a **feed**: one subreddit plus the two Slack channels its activity is pushed to (see [Feeds](#feeds)).
 
 The bot holds no Reddit credentials. Reddit is reached through a Devvit app (`devvit-app/`) installed on each subreddit, which the bot calls over HTTPS (see [Reddit by way of Devvit](#reddit-by-way-of-devvit)). This repo was ported from a PRAW-based bot; `RedditActions` still reads PRAW-shaped objects, which `devvit_reddit.py` now supplies.
@@ -68,7 +70,7 @@ Handlers that do their work off-thread (`handle_cast_vote`, `_check_queue_clear_
 
 **"Has blocks" no longer means "is a card."** The status message carries blocks of its own now that it has a button, so a test asking what a poll posted uses `FakeSlackClient.cards()`, which tells them apart by the `_STATUS_SIGNATURE` footer. Filtering `slack.posted` on `p["blocks"]` counts the status message as a card and fails.
 
-Anything that touches a feed needs the `feed` fixture from `conftest.py`: it installs a single resolved `Feed` on the listener (`L.feeds`) wired to the fakes, standing in for what `_startup()` builds. `actions_feed` is the same feed switched to `CONTROLS = actions`. `tests/test_feeds.py` covers config parsing and the two-subreddit case; `tests/test_controls.py` covers which controls a card gets and the handlers behind them; `tests/test_archive.py` covers the per-subreddit layout, the numbering counters, and rollover — it fast-forwards the counter rather than posting 999 items; `tests/test_retention.py` covers content retention — the deletion and 30-day scrubs of cards, threads, the store and the files; `tests/test_store.py` covers the store itself: entry round-tripping (including fields with no column), row-level writes, the JSON imports, the export schedule, and two concurrency tests that would have caught the vote-clobbering bug the JSON logs had.
+Anything that touches a feed needs the `feed` fixture from `conftest.py`: it installs a single resolved `Feed` on the listener (`L.feeds`) wired to the fakes, standing in for what `_startup()` builds. `actions_feed` is the same feed switched to `CONTROLS = actions` — a feed that does not vote, and the setting the dormant handlers still check. `tests/test_feeds.py` covers config parsing and the two-subreddit case; `tests/test_controls.py` covers which controls a card gets and the handlers behind them; `tests/test_archive.py` covers the per-subreddit layout, the numbering counters, and rollover — it fast-forwards the counter rather than posting 999 items; `tests/test_retention.py` covers content retention — the deletion and 30-day scrubs of cards, threads, the store and the files; `tests/test_store.py` covers the store itself: entry round-tripping (including fields with no column), row-level writes, the JSON imports, the export schedule, and two concurrency tests that would have caught the vote-clobbering bug the JSON logs had.
 
 ## Architecture
 
@@ -93,7 +95,7 @@ Things that are different from PRAW, and bite if forgotten:
 - **Objects are lazy, like PRAW's.** `reddit.comment(id=…)` makes no request until an attribute is read; a listed modmail conversation has no `mod_actions` until read, which is the per-conversation request `sync_archived_conversations` is written to avoid.
 - **User reports carry no counts.** Devvit gives report reasons only, so every `user_reports` entry is `(reason, 1)`.
 - **Failures are `DevvitError`; a 5xx is `ServerError`**, which `_is_server_error` recognises by status and by name. The app answers 502 for anything Reddit throws, so a Reddit outage still shortens the next poll.
-- **Only `ENABLED_OPS` run.** Devvit's Reddit permission is all-or-nothing, so the app narrows itself: `routeRpc` refuses any op not in `ENABLED_OPS` (`ops.ts`) — the reads (the `deletions` list among them) plus modmail archive/unarchive. Every op that posts, comments, removes, bans or messages is still written but answers 400 "disabled in this app"; reviving a dormant control means adding its op there and re-uploading.
+- **Only `ENABLED_OPS` run.** Devvit's Reddit permission is all-or-nothing, so the app narrows itself: `routeRpc` refuses any op not in `ENABLED_OPS` (`ops.ts`) — the reads (the `deletions` list among them) and nothing else. Every op that posts, comments, removes, bans, messages or archives is still written but answers 400 "disabled in this app"; reviving a dormant control means adding its op there and re-uploading.
 - **Rate limit: 5 requests/second per install.** `DevvitReddit.call` spaces calls under one lock, shared by the poll thread and the Slack handlers.
 - **External endpoints are experimental and limited-access** on Devvit; the `rpc` endpoint is declared with `"scopes": ["global"]`, which is what admits a long-lived managed token.
 
@@ -104,10 +106,10 @@ Not yet verified against live Reddit, because it needs the app deployed: whether
 **`log_store.py`** — `LogStore`, the SQLite persistence layer: one database per subreddit, row-level reads and writes, and the snapshot API the rest of the code reads through (see [The store](#the-store))
 
 **`reformed_listener.py`** — Slack Bolt app (Socket Mode). Handles:
-- Block Kit actions: `mark_done`, `cast_vote_*`, `reopen_item`, `modmail_action` (archive/unarchive), `my_unvoted` (the status message's personal vote list)
+- Block Kit actions: `mark_done`, `cast_vote_*`, `reopen_item`, `my_unvoted` (the status message's personal vote list)
 - The `Feed` class and `_load_feeds()`, which turn `slack.ini` into the list of subreddits being served
 - Background daemon thread polling every feed, auto-posting to configured channels, reconciling done-state, and keeping the queue/modmail status messages current
-- A dormant modal subsystem (see below) registered but currently unreachable, and `handle_modqueue_action`, which exists only to decline a click from a card carrying the withdrawn Take action… dropdown
+- A dormant modal subsystem (see below) registered but currently unreachable, and `handle_modqueue_action` / `handle_modmail_action`, which exist only to decline a click from a card still carrying a withdrawn control
 
 **`reddit_actions.py`** — `RedditActions` class. All Reddit API calls go here:
 - `get_modqueue()` / `get_conversations()` — fetch and deduplicate items; both support `as_blocks=True` to return Slack Block Kit payloads instead of plain text
@@ -116,8 +118,7 @@ Not yet verified against live Reddit, because it needs the app deployed: whether
 - `record_vote()` / `get_votes()` — per-item vote tracking, stored as rows in the `votes` table
 - `is_done()` / `set_item_done_at()` / `set_conv_done_at()` / `migrate_done_state()` — Slack done-state (see below)
 - `_build_modqueue_blocks()` / `_build_modmail_blocks()` / `build_item_blocks_open()` / `build_item_blocks_done()` — Block Kit payload builders
-- `archive_conversation()` / `unarchive_conversation()` — the only Reddit write the bot still offers from a card
-- `approve_item()`, `remove_item()`, `approve_and_ignore_reports()`, `warn_user()`, `ban_user()`, `unban_user()`, `reply_modmail()`, the modmail mute action, and `_build_take_action_element()` — dormant, kept for the modal revival
+- `archive_conversation()`, `unarchive_conversation()`, `approve_item()`, `remove_item()`, `approve_and_ignore_reports()`, `warn_user()`, `ban_user()`, `unban_user()`, `reply_modmail()`, the modmail mute action, and `_build_take_action_element()` — dormant, kept for the modal revival
 - `roll_log()` / `read_counters()` / `adopt_legacy_logs()` / `maybe_export()` — log rollover, the persisted card-numbering counters, the one-time import out of the older JSON logs, and the weekly export (see [The store](#the-store) and [Exports](#exports))
 - `refresh_mod_list()` / `is_mod()` — the subreddit's moderator list, read from Reddit rather than configured (it differs per subreddit) and cached for `_MOD_LIST_TTL` (6h). It is what tells a mod's modmail reply from a user's, so a failed or empty load **keeps the previous list** and retries after `_MOD_LIST_RETRY_DELAY` (5 min) — an empty list would make every mod reply look like a user reply and re-open resolved threads.
 
@@ -289,18 +290,20 @@ Interactive handlers go through `_interaction_allowed()`, which checks two gates
 Which controls a card carries is per feed, set by `CONTROLS` in `slack.ini` and parsed by `RedditActions.parse_controls()`:
 
 - **`vote`** — the Cast vote… dropdown and its tally on modqueue cards. The mods decide together and somebody acts on Reddit separately.
-- **`actions`** — Archive / Unarchive on modmail cards (`modmail_action`), performed **on Reddit for real**, for the whole mod team rather than in Slack alone.
+- **`actions`** — still parsed (with a warning), and adds nothing. It used to add controls that acted **on Reddit for real**; both generations of them are withdrawn. `actions_enabled` survives as the gate the dormant handlers check.
+
+**Modmail cards carry only Done.** Archive / Unarchive (`modmail_action`) went the same way as the modqueue dropdown below, and is kept the same way: `modmail_control_elements(include_archive=True)` still builds the button, `handle_modmail_action_dormant()` still does the work, `_mark_conv_as_archived()` / `_restore_conv_after_unarchive()` still rebuild the card, and `tests/test_controls.py` drives them directly. Reviving it takes three things, not one: pass `include_archive=True`, move the `@app.action("modmail_action")` decorator back, and add `modmail_archive` / `modmail_unarchive` to `ENABLED_OPS` in the app. An archive or unarchive made on Reddit is still mirrored by `sync_archived_conversations()` — that is a read.
 
 **Modqueue cards carry no Reddit action.** `actions` used to put a Take action… dropdown (`modqueue_action`) on them — Approve / Remove / Warn / Ban, plus an *Ignore reports & Approve* option behind its own `ignore_reports` control — and that was withdrawn. What survives is dormant and deliberately intact: `RedditActions._build_take_action_element()` (the dropdown, now with an explicit `include_ignore_reports=` argument in place of the removed control), `handle_modqueue_action_dormant()` (every branch), the Remove/Warn/Ban modals and their `@app.view` handlers, and `approve_and_ignore_reports()`. Reviving it is emitting the dropdown from `_build_item_actions_block()` again, gated on a control, and moving the `@app.action("modqueue_action")` decorator back onto the dormant handler. `tests/test_controls.py` drives all of it directly, so a revival starts from working code.
 
-Both controls, comma-separated, gives both; an absent key means `vote`, which is what every card carried before this existed; a present-but-empty value means neither, which is legitimate. `[Default] CONTROLS` sets the house rule and a feed's own key overrides it (`_controls_for`).
+An absent key means `vote`, which is what every card carried before this existed; a present-but-empty value means no voting, which is legitimate. `[Default] CONTROLS` sets the house rule and a feed's own key overrides it (`_controls_for`).
 
 The resolved set lives on the feed's `RedditActions` (`controls`, with `voting_enabled` / `actions_enabled`), because that is what builds the blocks — no threading a flag down the call chain. `Feed.controls` holds the same set for the handlers.
 
 Two rules hold this together:
 
 - **Done is not one of the controls.** Every card gets a Done button, so an item can always be closed out in Slack whatever else it offers.
-- **Every handler re-checks the setting.** A card posted before the config changed still carries the old buttons, and Slack will happily deliver a click from it. `handle_cast_vote` and `handle_modmail_action` decline with an ephemeral notice rather than trusting the payload; `handle_modqueue_action` is the same rule taken to its end — the dropdown is gone entirely, so the registration stays only to decline a click from a card that still has one.
+- **Every handler re-checks the setting.** A card posted before the config changed still carries the old buttons, and Slack will happily deliver a click from it. `handle_cast_vote` declines with an ephemeral notice rather than trusting the payload; `handle_modqueue_action` and `handle_modmail_action` are the same rule taken to its end — those controls are gone entirely, so each registration stays only to decline a click from a card that still has one.
 
 The vote tally section follows `_wants_tally()`: shown when the feed votes, and also when votes already exist, so switching a feed to `actions` does not erase the tally from cards that have one.
 
@@ -352,7 +355,7 @@ The whole subsystem is **dormant**: the modqueue dropdown that opened these moda
 
 **A Silent Remove needs no removal reason.** Slack cannot make one input conditional on another, so `reason_select_block` is `optional` in the view and the rule is enforced in `handle_removal_submitted`: a delivery other than `silent` with neither a preset reason nor written text is bounced back with `ack(response_action="errors", …)` on that block, because it would send an empty message and be a silent removal in all but name. That is why the handler reads the view state **before** acknowledging — an `ack()` at the top cannot be taken back. A missing delivery choice falls back to `silent`, matching `remove_item`'s own default: an unintended message to the user is the worse of the two failures.
 
-Modmail **Reply / Mute / Warn / Ban** are dormant in the same way, and were before this. `handle_modmail_action` — the one Reddit-action handler still live — covers `archive` and `unarchive` only, and `_build_modmail_actions_block()` is the unemitted dropdown holding the rest — it is the shape those branches take when they come back. `handle_modmail_action` reads its payload through `_selected_value()`, which accepts either a button (Archive) or a one-option dropdown (the Unarchive control left behind by `_mark_conv_as_archived`); that Unarchive control was live but dead before this, since every branch behind it was commented out.
+Modmail **Reply / Mute / Warn / Ban** are dormant in the same way, and were before this. `handle_modmail_action_dormant` covers `archive` and `unarchive` only — themselves dormant now, see [Card controls](#card-controls) — and `_build_modmail_actions_block()` is the unemitted dropdown holding the rest — it is the shape those branches take when they come back. The dormant handler reads its payload through `_selected_value()`, which accepts either a button (Archive) or a one-option dropdown (the Unarchive control left behind by `_mark_conv_as_archived`); that Unarchive control was live but dead before this, since every branch behind it was commented out.
 
 ## slack.ini Sections
 
@@ -365,7 +368,7 @@ Modmail **Reply / Mute / Warn / Ban** are dormant in the same way, and were befo
 | `[Default]` | `DEVVIT_TOKEN` | Managed app token for the Devvit app (`devvit_at_...`); one for every install |
 | `[Subreddit:<name>]` | `MODQUEUE_CHANNEL` | Channel name or ID for that subreddit's mod reports |
 | `[Subreddit:<name>]` | `MODMAIL_CHANNEL` | Channel name or ID for that subreddit's modmail |
-| `[Subreddit:<name>]` | `CONTROLS` | Which card controls that subreddit gets: `vote`, `actions`, comma-separated. Default `vote` (see [Card controls](#card-controls)) |
+| `[Subreddit:<name>]` | `CONTROLS` | Which card controls that subreddit gets: `vote`, or empty for none (`actions` is accepted and does nothing). Default `vote` (see [Card controls](#card-controls)) |
 | `[Default]` | `CONTROLS` | `CONTROLS` for every feed that does not set its own |
 | `[Subreddit:<name>]` | `DEVVIT_URL` | External root URL of the Devvit app's install on that subreddit. Required |
 | `[Subreddit:<name>]` | `DEVVIT_TOKEN` | Token for a subreddit served by a second Devvit app (its own Reddit account); wins over `[Default]`'s |

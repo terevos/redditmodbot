@@ -16,8 +16,8 @@ Slack bot.
 
 The app reads a subreddit's mod queue and modmail on behalf of that
 subreddit's moderators and makes them available to the moderators' Slack bot.
-It acts only in the subreddit it is installed on, and only as the app's own
-account. See the [Privacy Policy](PRIVACY.md) for the data involved.
+It only reads, and only in the subreddit it is installed on: it does not
+approve, remove, ban, archive, message, post or comment. See the [Privacy Policy](PRIVACY.md) for the data involved.
 
 ## Acceptable use
 

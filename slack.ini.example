@@ -29,16 +29,14 @@ DEVVIT_TOKEN = devvit_at_your-managed-token-here
 # CONTROLS picks which buttons a card carries, per subreddit:
 #   vote      the Cast vote... dropdown and its tally on modqueue cards — mods
 #             decide together, and somebody acts on Reddit separately
-#   actions   Archive / Unarchive on modmail cards, performed on Reddit for
-#             real, for the whole mod team rather than in Slack alone
-# Comma-separate to combine them. Omit the key for `vote`, which is what every
-# card carried before this existed. A CONTROLS in [Default] applies to every
-# subreddit that does not set its own.
+# Omit the key for `vote`, which is what every card carried before this
+# existed; leave it empty for cards with no voting. A CONTROLS in [Default]
+# applies to every subreddit that does not set its own.
 #
-# Modqueue items carry no Reddit action of their own: `actions` once added a
-# Take action... dropdown (Approve / Remove / Warn / Ban) there, and that was
-# withdrawn. Act on Reddit itself, then mark the item Done in Slack — or let
-# the poll loop notice it left the modqueue and close the card for you.
+# The bot is read-only: no card carries a control that acts on Reddit. A value
+# of `actions`, which once added such controls, is still accepted and does
+# nothing. Act on Reddit itself, then mark the item Done in Slack — or let the
+# poll loop notice what happened and update the card for you.
 #
 # The Done button is not part of this: every card has one, so an item can
 # always be closed out in Slack whatever else it offers.
@@ -58,12 +56,12 @@ DEVVIT_URL       = https://reformedautomodv2-2th52-external.devvit.net/external/
 [Subreddit:whatcouldgowrong]
 MODQUEUE_CHANNEL = wcgw_reports
 MODMAIL_CHANNEL  = wcgw_mail
-CONTROLS         = vote, actions
+CONTROLS         = vote
 DEVVIT_URL       = https://wcgwautomodv2-2qh1i-external.devvit.net/external/
 
 [Mods]
 # Map Slack user IDs to Reddit usernames.
-# Only users listed here can vote, mark items Done, or archive modmail.
+# Only users listed here can vote or mark items Done.
 # These moderators can act in every feed.
 # Format: SLACK_USER_ID = reddit_username  (Slack IDs are uppercase: U...)
 U0123456789 = terevos2

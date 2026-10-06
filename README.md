@@ -7,6 +7,8 @@ It comes in two parts:
 - **The bot** (Python, this directory) — talks to Slack, keeps the state, and runs on a machine of yours.
 - **The Devvit app** (`devvit-app/`, TypeScript) — installed on each subreddit, runs on Reddit's Developer Platform, and is the bot's only route to Reddit. The bot holds no Reddit credentials; it calls the app with a token.
 
+It is read-only and one-way: Reddit to Slack. Votes, Done and Re-open live in Slack alone, and every moderation action is taken on Reddit itself.
+
 Any number of subreddits can be served at once. Each gets its own pair of Slack channels (one for mod reports, one for modmail), its own numbering, and its own status messages; see [Configuration Files](#configuration-files).
 
 ---
@@ -70,12 +72,11 @@ Below the summary is an **Items I haven't voted on** button. The list it returns
 
 New modmail conversations are posted as top-level messages in the modmail channel and assigned a sequential `#N` number. Replies within the same conversation are posted as **thread replies**, keeping each conversation together. Auto-generated Reddit messages (mod invitations, approved-user additions, etc.) are silently skipped.
 
-### Actions
+### Controls
 
-The controls sit on the conversation's own card, not on its thread replies:
+A conversation's card has one control, **Done**, which marks it resolved in Slack alone. Thread replies carry none.
 
-- **Done** — Marks the conversation resolved in Slack alone, leaving Reddit untouched. Always present.
-- **Archive** — Archives the conversation on Reddit for the whole mod team, and marks it **done**. Replaced afterwards by a single **Unarchive** option, which puts the conversation and its controls back. Offered only on a subreddit configured for `CONTROLS = actions`.
+Nothing in Slack acts on Reddit. Reply, archive and mute on Reddit itself; the next poll picks up an archive or unarchive and updates the card.
 
 ### Done and Re-opened
 
@@ -84,12 +85,11 @@ A conversation is marked **done** when any of the following occur:
 | Trigger | How |
 |---|---|
 | Mod marks it done in Slack | Done button |
-| Mod archives via bot | Archive button |
-| Archived directly on Reddit | Detected on next poll |
+| Archived on Reddit | Detected on next poll |
 
 When done, the top-level message gains a status header and `:completed: DONE :completed:` marker.
 
-A conversation is **re-opened** when a new message arrives from a non-mod. The new message is posted as a thread reply and the top-level message is updated to show `🔄 REOPENED`. Unarchiving via the bot also re-opens the conversation and restores its controls.
+A conversation is **re-opened** when a new message arrives from a non-mod. The new message is posted as a thread reply and the top-level message is updated to show `🔄 REOPENED`. Unarchiving it on Reddit also re-opens the conversation and restores its Done button.
 
 ### Modmail Summaries
 
@@ -176,7 +176,7 @@ DEVVIT_URL       = https://reformedautomodv2-2th52-external.devvit.net/external/
 [Subreddit:whatcouldgowrong]
 MODQUEUE_CHANNEL = wcgw_reports
 MODMAIL_CHANNEL  = wcgw_mail
-CONTROLS         = vote, actions
+CONTROLS         = vote
 DEVVIT_URL       = https://wcgwautomodv2-2qh1i-external.devvit.net/external/
 
 [Mods]
@@ -187,11 +187,11 @@ UABCDEFGHIJ = another_mod
 UZYXWVUTSRQ = wcgw_only_mod
 ```
 
-One `[Subreddit:<name>]` section per subreddit; add a section to add a subreddit. Each is reached through the Devvit app's install on that subreddit, at its `DEVVIT_URL`. At startup the bot asks each install which subreddit it serves, and refuses to run if a URL has been put under the wrong section. Reddit sees the bot's actions as the app's own account.
+One `[Subreddit:<name>]` section per subreddit; add a section to add a subreddit. Each is reached through the Devvit app's install on that subreddit, at its `DEVVIT_URL`. At startup the bot asks each install which subreddit it serves, and refuses to run if a URL has been put under the wrong section. The bot only reads: it changes nothing on Reddit.
 
-To act on one subreddit as a different Reddit account, upload the app a second time under another name (a copy of `devvit.json` with its own `name`, passed as `devvit upload --config <file>`), install that app there, and give the subreddit's section its own `DEVVIT_TOKEN` — a token belongs to one app, and a section's token wins over `[Default]`'s.
+To serve one subreddit through a different Reddit account, upload the app a second time under another name (a copy of `devvit.json` with its own `name`, passed as `devvit upload --config <file>`), install that app there, and give the subreddit's section its own `DEVVIT_TOKEN` — a token belongs to one app, and a section's token wins over `[Default]`'s.
 
-`CONTROLS` picks which controls that subreddit's cards carry: `vote` for the Cast vote… dropdown on report cards, `actions` for Archive/Unarchive on modmail cards, comma-separated for both. Omit the key for `vote`. A `CONTROLS` in `[Default]` applies to every subreddit that does not set its own. The Done button is not part of the choice — every card has one.
+`CONTROLS` picks which controls that subreddit's cards carry. There is one, `vote`: the Cast vote… dropdown on report cards. Omit the key for `vote`, or leave it empty for no voting. (`actions`, which once added buttons that acted on Reddit, is still accepted and does nothing.) A `CONTROLS` in `[Default]` applies to every subreddit that does not set its own. The Done button is not part of the choice — every card has one.
 
 Channel values may be a channel name (`mod_actions`) or a Slack channel ID (`C0123456789`); names are resolved to IDs when the bot starts. For a private channel, invite the bot to it first or the lookup will fail. Leave a channel blank to disable auto-posting for that category.
 

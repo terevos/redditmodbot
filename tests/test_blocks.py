@@ -172,7 +172,7 @@ def test_a_reopened_card_gets_its_controls_back(feed: Any, actions: RedditAction
     assert ids == ["mark_done"]
 
 
-def test_a_reopened_card_on_an_actions_feed_gets_archive_back_too(actions_feed: Any, actions: RedditActions, slack: Any) -> None:
+def test_a_reopened_card_on_an_actions_feed_gets_only_done_back(actions_feed: Any, actions: RedditActions, slack: Any) -> None:
     _conv_logged(actions)
     slack.seed_message("111.0", [DETAIL, ACTIONS])
     L._mark_conv_as_actioned(slack, actions_feed, CHANNEL, "c1", "✅ DONE — friardon")
@@ -182,7 +182,7 @@ def test_a_reopened_card_on_an_actions_feed_gets_archive_back_too(actions_feed: 
 
     blocks = slack.last_update()["blocks"]
     ids = [e["action_id"] for b in blocks if b.get("type") == "actions" for e in b["elements"]]
-    assert ids == ["modmail_action", "mark_done"]
+    assert ids == ["mark_done"]
 
 
 def test_reopening_twice_does_not_stack_controls(feed: Any, actions: RedditActions, slack: Any) -> None:

@@ -12,7 +12,7 @@ to the public.
 The Devvit app is installed on a subreddit by its moderators. The Slack bot
 asks the app for that subreddit's mod queue and modmail and posts them to the
 moderator team's private Slack workspace, so the moderators can discuss and
-keep track of them there.
+keep track of them there. It only reads from Reddit; it changes nothing there.
 
 ## What data it handles
 

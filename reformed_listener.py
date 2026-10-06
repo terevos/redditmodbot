@@ -1363,8 +1363,8 @@ def handle_modqueue_action(ack: Any, body: Dict[str, Any], client: Any) -> None:
     ``RedditActions._build_take_action_element``), but a card posted while it
     was live still carries one and Slack will happily deliver the click. Every
     branch behind it wrote to Reddit for real, so it is declined here rather
-    than left quietly working on a bot that no longer offers it. Modmail
-    Archive/Unarchive is the only Reddit action still live.
+    than left quietly working on a bot that no longer offers it. No Reddit
+    action is live: see ``handle_modmail_action`` for the modmail twin.
 
     Args:
         ack: Slack Bolt acknowledgement callable.
@@ -1749,6 +1749,37 @@ def handle_ban_submitted(ack: Any, body: Dict[str, Any], client: Any) -> None:
 
 @app.action("modmail_action")
 def handle_modmail_action(ack: Any, body: Dict[str, Any], client: Any) -> None:
+    """Decline a click on a retired modmail Archive or Unarchive control.
+
+    Neither is emitted any more — the bot reads Reddit and never writes to it —
+    but a card posted while they were live still carries one, and Slack will
+    deliver the click. The Devvit app refuses the ops as well, so this is the
+    polite half of a refusal that would happen anyway.
+
+    Args:
+        ack: Slack Bolt acknowledgement callable.
+        body: Full Slack action payload.
+        client: Slack ``WebClient`` for API calls.
+    """
+    ack()
+    user_id: str = body["user"]["id"]
+    channel: str = body["container"]["channel_id"]
+    logging.info(f"modmail_action: declined — retired control, channel={channel} user={user_id}")
+    client.chat_postEphemeral(channel=channel, user=user_id, text="Archiving from Slack has been withdrawn — this is an older message. Archive or unarchive the conversation on Reddit and this card will follow.")
+
+
+# ---------------------------------------------------------------------------
+# DORMANT — modmail Archive / Unarchive on Reddit.
+#
+# As it worked when the Archive button was emitted. Nothing calls this: the
+# button is dormant in RedditActions.modmail_control_elements, the registration
+# above declines instead, and the Devvit app no longer enables the two ops.
+# Reviving it is all three: pass include_archive=True where the controls are
+# built, move the @app.action decorator back here, and add `modmail_archive` /
+# `modmail_unarchive` to ENABLED_OPS in the app.
+# ---------------------------------------------------------------------------
+
+def handle_modmail_action_dormant(ack: Any, body: Dict[str, Any], client: Any) -> None:
     """Archive or unarchive a modmail conversation on Reddit.
 
     Serves the Archive button on an open card and the Unarchive dropdown that

@@ -236,7 +236,7 @@ def test_an_actions_feed_leaves_a_modqueue_card_with_only_done(actions: RedditAc
 
 
 def test_a_feed_can_have_both(actions: RedditActions) -> None:
-    """Both controls: voting on modqueue cards, Archive on modmail ones."""
+    """Both controls: voting on modqueue cards, and `actions` adds nothing."""
     actions.controls = frozenset({"vote", "actions"})
 
     queue = actions._build_modqueue_blocks(
@@ -249,7 +249,7 @@ def test_a_feed_can_have_both(actions: RedditActions) -> None:
     )
 
     assert any(a.startswith("cast_vote") for a in action_ids(queue))
-    assert action_ids(mail) == ["modmail_action", "mark_done"]
+    assert action_ids(mail) == ["mark_done"]
 
 
 def test_votes_already_cast_stay_visible_after_voting_is_switched_off(actions: RedditActions) -> None:
@@ -302,23 +302,34 @@ def test_a_reopened_card_comes_back_with_the_feeds_own_controls(actions: RedditA
 # modmail cards
 # ---------------------------------------------------------------------------
 
-def test_modmail_gets_an_archive_button_only_on_an_actions_feed(actions: RedditActions) -> None:
-    voting = actions._build_modmail_blocks(
-        conv_id="c1", message_id="m1", author="someone", subject="Ban appeal",
-        body="hello", date_str="2026-07-29", conv_num=1,
-    )
-    assert action_ids(voting) == ["mark_done"]
+def test_a_modmail_card_carries_only_done_whatever_the_feed_is_set_to(actions: RedditActions) -> None:
+    for controls in ({"vote"}, {"actions"}, {"vote", "actions"}):
+        actions.controls = frozenset(controls)
+        blocks = actions._build_modmail_blocks(
+            conv_id="c1", message_id="m1", author="someone", subject="Ban appeal",
+            body="hello", date_str="2026-07-29", conv_num=1,
+        )
+        assert action_ids(blocks) == ["mark_done"], controls
 
-    actions.controls = frozenset({"actions"})
-    acting = actions._build_modmail_blocks(
-        conv_id="c1", message_id="m1", author="someone", subject="Ban appeal",
-        body="hello", date_str="2026-07-29", conv_num=1,
-    )
-    assert action_ids(acting) == ["modmail_action", "mark_done"]
 
-    archive = next(e for b in acting if b.get("type") == "actions"
-                   for e in b["elements"] if e["action_id"] == "modmail_action")
-    assert archive["value"] == "archive|c1|someone"
+def test_the_dormant_archive_button_is_still_buildable(actions: RedditActions) -> None:
+    elements = actions.modmail_control_elements("c1", "someone", include_archive=True)
+    assert [e["action_id"] for e in elements] == ["modmail_action", "mark_done"]
+    assert elements[0]["value"] == "archive|c1|someone"
+
+
+def test_a_click_on_a_retired_archive_control_takes_no_reddit_action(actions_feed: Any, actions: RedditActions,
+                                                                     slack: Any, fake_reddit: Any, authorised: None) -> None:
+    """A card posted while Archive was live still carries a working button."""
+    conv = FakeConversation("c1")
+    fake_reddit._sub.modmail.all = [conv]
+
+    L.handle_modmail_action(ack, body({"value": "archive|c1|someone"}, channel=MAIL_CHANNEL), slack)
+    L.handle_modmail_action(ack, body({"selected_option": {"value": "unarchive|c1|someone"}}, channel=MAIL_CHANNEL), slack)
+
+    assert conv.archived is None
+    assert slack.updated == []
+    assert len(slack.ephemeral) == 2 and "withdrawn" in slack.ephemeral[-1]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +546,7 @@ def test_archive_archives_on_reddit_and_marks_the_thread_done(actions_feed: Any,
     }}})
     slack.seed_message(TS, [DETAIL])
 
-    L.handle_modmail_action(ack, body({"value": "archive|c1|someone"}, channel=MAIL_CHANNEL), slack)
+    L.handle_modmail_action_dormant(ack, body({"value": "archive|c1|someone"}, channel=MAIL_CHANNEL), slack)
 
     entry = actions.get_modmail_file()[MAIL_CHANNEL]["modmail_conv"]["c1"]
     assert conv.archived is True
@@ -552,7 +563,7 @@ def test_archive_is_refused_on_a_voting_feed(feed: Any, actions: RedditActions,
         "c1": {"conv_num": 1, "subject": "s", "author": "someone", "slack_ts": TS},
     }}})
 
-    L.handle_modmail_action(ack, body({"value": "archive|c1|someone"}, channel=MAIL_CHANNEL), slack)
+    L.handle_modmail_action_dormant(ack, body({"value": "archive|c1|someone"}, channel=MAIL_CHANNEL), slack)
 
     assert conv.archived is None
     assert slack.ephemeral and "switched off" in slack.ephemeral[-1]["text"]
@@ -569,8 +580,8 @@ def test_unarchive_puts_the_conversation_back(actions_feed: Any, actions: Reddit
     }}})
     slack.seed_message(TS, [DETAIL])
 
-    L.handle_modmail_action(ack, body({"selected_option": {"value": "unarchive|c1|someone"}},
-                                      channel=MAIL_CHANNEL), slack)
+    L.handle_modmail_action_dormant(ack, body({"selected_option": {"value": "unarchive|c1|someone"}},
+                                              channel=MAIL_CHANNEL), slack)
 
     entry = actions.get_modmail_file()[MAIL_CHANNEL]["modmail_conv"]["c1"]
     assert conv.archived is False

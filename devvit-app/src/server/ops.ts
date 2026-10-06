@@ -144,11 +144,12 @@ export function toConversation(
 }
 
 /**
- * The ops a caller may actually run. A leaked token can do whatever the app
- * can, so the app can do only what the bot uses: read the queue and modmail,
- * and archive or unarchive a conversation. Everything that posts, comments,
- * removes, bans or messages stays written below but is refused — the bot's
- * matching controls are dormant too, and reviving one is adding its op here.
+ * The ops a caller may actually run: the reads, and nothing else. A leaked
+ * token can do whatever the app can, so the app can only look — the bot shows
+ * Reddit in Slack and every action is taken on Reddit itself. Everything that
+ * posts, comments, removes, bans, messages or archives stays written below but
+ * is refused; the bot's matching controls are dormant too, and reviving one is
+ * adding its op here.
  */
 export const ENABLED_OPS: ReadonlySet<string> = new Set([
   'info',
@@ -157,8 +158,6 @@ export const ENABLED_OPS: ReadonlySet<string> = new Set([
   'item',
   'modmail_conversations',
   'modmail_conversation',
-  'modmail_archive',
-  'modmail_unarchive',
   'deletions',
 ])
 
