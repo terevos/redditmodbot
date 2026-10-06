@@ -53,13 +53,13 @@ DEVVIT_TOKEN = devvit_at_your-managed-token-here
 MODQUEUE_CHANNEL = modbot_reports
 MODMAIL_CHANNEL  = modbot_mail
 CONTROLS         = vote
-DEVVIT_URL       = https://redditmodbot-2th52-external.devvit.net/external/
+DEVVIT_URL       = https://reformedautomodv2-2th52-external.devvit.net/external/
 
 [Subreddit:whatcouldgowrong]
 MODQUEUE_CHANNEL = wcgw_reports
 MODMAIL_CHANNEL  = wcgw_mail
 CONTROLS         = vote, actions
-DEVVIT_URL       = https://redditmodbot-2qh1i-external.devvit.net/external/
+DEVVIT_URL       = https://wcgwautomodv2-2qh1i-external.devvit.net/external/
 
 [Mods]
 # Map Slack user IDs to Reddit usernames.

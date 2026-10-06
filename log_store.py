@@ -359,6 +359,35 @@ class LogStore:
             self._mark_channel(conn, KIND_QUEUE, channel)
             self._write_item(conn, channel, item_id, entry)
 
+    # ``scrubbed_at`` and ``deleted_at`` have no column of their own, so they
+    # are read out of ``extra``; an empty ``extra`` is NULL, never ``''``.
+    _UNSCRUBBED: str = "json_extract(COALESCE(extra, '{}'), '$.scrubbed_at') IS NULL"
+    _DELETED: str = "json_extract(COALESCE(extra, '{}'), '$.deleted_at') IS NOT NULL"
+
+    def items_to_scrub(self, channel: str, done_before: float, limit: int) -> List[str]:
+        """Return the items in *channel* whose content is due to go.
+
+        That is anything deleted on Reddit, and anything closed before
+        *done_before* — deletions first, then oldest closed first — skipping
+        what has been scrubbed already.
+        """
+        rows = self._connection().execute(
+            f"SELECT item_id FROM items WHERE channel = ? AND {self._UNSCRUBBED} "
+            f"AND ({self._DELETED} OR (done_at IS NOT NULL AND done_at < ?)) "
+            f"ORDER BY {self._DELETED} DESC, done_at LIMIT ?",
+            (channel, done_before, limit),
+        ).fetchall()
+        return [row["item_id"] for row in rows]
+
+    def convs_to_scrub(self, channel: str, done_before: float, limit: int) -> List[str]:
+        """Return the conversations in *channel* closed before *done_before* and not yet scrubbed."""
+        rows = self._connection().execute(
+            f"SELECT conv_id FROM convs WHERE channel = ? AND {self._UNSCRUBBED} "
+            "AND done_at IS NOT NULL AND done_at < ? ORDER BY done_at LIMIT ?",
+            (channel, done_before, limit),
+        ).fetchall()
+        return [row["conv_id"] for row in rows]
+
     def delete_items(self, channel: str, item_ids: Sequence[str]) -> None:
         """Delete items and their votes — used by the rollover, after archiving."""
         if not item_ids:

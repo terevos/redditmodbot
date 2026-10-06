@@ -143,7 +143,7 @@ def startup(monkeypatch: pytest.MonkeyPatch) -> Any:
         FakeSession.serves.update(serves or {})
         monkeypatch.setattr(L, "feeds", built)
         # After the feeds exist: Feed itself reads RedditActions.parse_controls.
-        monkeypatch.setattr(L, "RedditActions", lambda sub, reddit, controls: type("RA", (), {"session": reddit, "adopt_legacy_logs": lambda s, c: None, "migrate_done_state": lambda s: None, "refresh_mod_list": lambda s: None})())
+        monkeypatch.setattr(L, "RedditActions", lambda sub, reddit, controls: type("RA", (), {"session": reddit, "adopt_legacy_logs": lambda s, c: None, "migrate_done_state": lambda s: None, "scrub_log_files": lambda s: [], "refresh_mod_list": lambda s: None})())
         return built
 
     return install

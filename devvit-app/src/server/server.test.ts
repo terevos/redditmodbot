@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import {once} from 'node:events'
 import {createServer} from 'node:http'
 import {test} from 'node:test'
-import type {OnModActionRequest} from '@devvit/web/shared'
+import type {
+  OnCommentDeleteRequest,
+  OnModActionRequest,
+  OnPostDeleteRequest,
+} from '@devvit/web/shared'
+import {deletedId} from './deletions.ts'
 import {BadRequest, ENABLED_OPS, ops, toConversation, toThing} from './ops.ts'
 import {resolutionFromModAction} from './resolutions.ts'
 import {onReq, routeRpc} from './server.ts'
@@ -47,6 +52,26 @@ test('a comment action resolves the comment, not its parent post', () => {
 test('a mod action that settles nothing is ignored', () => {
   const event = modAction({action: 'lock', targetPost: {id: 't3_abc'}} as Partial<OnModActionRequest>)
   assert.equal(resolutionFromModAction(event), undefined)
+})
+
+test('a deletion names the item that went, post or comment', () => {
+  const post = {type: 'PostDelete', postId: 't3_abc', source: 1} as unknown as OnPostDeleteRequest
+  assert.equal(deletedId(post), 'abc')
+  // A comment's event carries its post as well; the comment is what was deleted.
+  const comment = {
+    type: 'CommentDelete',
+    commentId: 't1_xyz',
+    postId: 't3_abc',
+    source: 2,
+  } as unknown as OnCommentDeleteRequest
+  assert.equal(deletedId(comment), 'xyz')
+})
+
+test('a moderator removal is not a deletion', () => {
+  for (const source of [3, 'MODERATOR']) {
+    const event = {type: 'PostDelete', postId: 't3_abc', source} as unknown as OnPostDeleteRequest
+    assert.equal(deletedId(event), undefined)
+  }
 })
 
 test('a comment becomes a PRAW-shaped thing', () => {

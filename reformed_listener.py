@@ -424,6 +424,9 @@ def _startup() -> None:
         # up by the poll loop once it resolves.
         feed.reddit.adopt_legacy_logs(feed.channels())
         feed.reddit.migrate_done_state()
+        # Files written before content stopped being kept in them. After the
+        # import above, which is the one reader that wanted what they held.
+        feed.reddit.scrub_log_files()
         feed.reddit.refresh_mod_list()
         logging.info(f"Feed {feed.label}: modqueue={feed.modqueue_channel} modmail={feed.modmail_channel} controls={sorted(feed.controls) or 'none'}")
 
@@ -2038,13 +2041,25 @@ def handle_reopen_item(ack: Any, body: Dict[str, Any], client: Any) -> None:
 
 @app.error
 def handle_error(error: Exception, body: Dict[str, Any]) -> None:
-    """Log any exception Bolt did not handle, with the payload that caused it.
+    """Log any exception Bolt did not handle, and which interaction caused it.
+
+    Only identifiers are logged. The payload of a click carries the whole
+    message it was made on, and a card's text is Reddit content that has no
+    business in a log file.
 
     Args:
         error: The unhandled exception.
         body: The Slack payload being processed when it was raised.
     """
-    logging.error(f"Bolt error: {error} | body: {body}")
+    body = body if isinstance(body, dict) else {}
+    container = body.get("container") or {}
+    actions = [a.get("action_id") for a in body.get("actions") or [] if isinstance(a, dict)]
+    logging.error(
+        f"Bolt error: {error} | type={body.get('type')} actions={actions} "
+        f"user={(body.get('user') or {}).get('id')} "
+        f"channel={(body.get('channel') or {}).get('id') or container.get('channel_id')} "
+        f"ts={container.get('message_ts')}"
+    )
 
 
 @app.event("message")
@@ -2615,6 +2630,173 @@ def _reconcile_modqueue_state(web_client: SlackWebClient, feed: Feed, poll_inter
     return changed
 
 
+# Entries scrubbed per feed per poll. Each one is a message fetch and an edit
+# (a modmail thread, one edit per reply), and the first pass after an upgrade
+# finds every card ever closed waiting — so the backlog is worked off a few at
+# a time rather than all at once into Slack's rate limit.
+_SCRUB_BATCH: int = 5
+
+# Slack's reasons for refusing an edit that no retry will change. The message
+# is deleted instead: what must not happen is the content staying up.
+_UNEDITABLE_ERRORS: Tuple[str, ...] = ("edit_window_closed", "cant_update_message")
+
+_SCRUBBED_REPLY_TEXT: str = "_Message removed 30 days after the conversation closed._"
+
+
+def _slack_error_code(exc: BaseException) -> str:
+    """Return Slack's error code for *exc*, or ``''`` if it is not a Slack refusal."""
+    response = getattr(exc, "response", None)
+    try:
+        return str(response["error"]) if response is not None else ""
+    except (KeyError, TypeError):
+        return ""
+
+
+def _replace_or_delete(client: Any, channel: str, ts: str, blocks: List[Dict[str, Any]], text: str) -> Optional[List[Dict[str, Any]]]:
+    """Edit a message down to *blocks*, deleting it if Slack will not allow an edit.
+
+    Returns:
+        The blocks now showing, or ``None`` if the message was deleted.
+
+    Raises:
+        Exception: Anything else Slack answered — the caller retries later.
+    """
+    try:
+        client.chat_update(channel=channel, ts=ts, blocks=blocks, text=text)
+        return blocks
+    except Exception as e:
+        if _slack_error_code(e) not in _UNEDITABLE_ERRORS:
+            raise
+    client.chat_delete(channel=channel, ts=ts)
+    return None
+
+
+def _live_blocks(client: Any, channel: str, ts: str) -> Optional[List[Dict[str, Any]]]:
+    """Return the blocks of the message at *ts*, or ``None`` if it is gone."""
+    messages = client.conversations_history(channel=channel, latest=ts, inclusive=True, limit=1).get("messages", [])
+    return messages[0].get("blocks") or [] if messages else None
+
+
+def _scrub_item_card(client: Any, feed: Feed, channel: str, item_id: str) -> None:
+    """Remove an item's content from its Slack card and from the store.
+
+    The card keeps its number, votes, status and controls. Slack goes first:
+    the store is only marked scrubbed once the card is, so a failed edit is
+    retried on a later poll rather than forgotten.
+    """
+    reddit = feed.reddit
+    entry = reddit.get_item_info(channel, item_id)
+    ts = entry.get("slack_ts")
+    blocks: Optional[List[Dict[str, Any]]] = None
+    if ts:
+        try:
+            live = _live_blocks(client, channel, ts)
+            if live is not None:
+                blocks = _replace_or_delete(
+                    client, channel, ts,
+                    reddit.scrubbed_item_blocks(live, entry, reddit.scrub_reason(entry)),
+                    "Mod report item (content removed)",
+                )
+        except Exception as e:
+            if not reddit.record_scrub_failure(reddit.KIND_QUEUE, channel, item_id):
+                logging.warning(f"Could not scrub card for {item_id} ({feed.label}), will retry: {e}")
+                return
+            logging.error(f"Giving up on the Slack card for {item_id} ({feed.label}); its content is still in Slack: {e}")
+    reddit.scrub_item(channel, item_id, blocks)
+    logging.info(f"Scrubbed {item_id} ({feed.label}): {reddit.scrub_reason(entry)}")
+
+
+def _scrubbed_conv_card(reddit: RedditActions, blocks: List[Dict[str, Any]], conv_id: str, entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return a modmail card's *blocks* without the author, subject or message."""
+    notice = f"*Modmail* | <https://mod.reddit.com/mail/perma/{conv_id}|View>\n{reddit.scrub_notice(reddit.SCRUB_EXPIRED)}"
+    out: List[Dict[str, Any]] = []
+    replaced = False
+    for block in blocks:
+        if block.get("type") == "header":
+            out.append(reddit.header_block(reddit.scrubbed_conv_header(str(block.get("text", {}).get("text", "")), entry)))
+        elif block.get("type") == "section" and not block.get("block_id") and not _is_status_marker(block):
+            if not replaced:
+                out.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
+                replaced = True
+        else:
+            out.append(reddit.without_author_in_controls(block, str(entry.get("author") or "")))
+    return out
+
+
+def _scrub_conv_replies(client: Any, channel: str, conv_ts: str) -> None:
+    """Remove the message text from every reply the bot threaded under a card.
+
+    A reply carrying a modmail message is the bot's own, with a section block;
+    the thread notes ("Archived on Reddit by …") are plain text and stay.
+    """
+    cursor: Optional[str] = None
+    while True:
+        resp = client.conversations_replies(channel=channel, ts=conv_ts, limit=200, cursor=cursor)
+        for message in resp.get("messages", []):
+            ts = message.get("ts")
+            if not ts or ts == conv_ts or not message.get("bot_id"):
+                continue
+            sections = [b for b in message.get("blocks") or [] if b.get("type") == "section"]
+            if not sections or all(b.get("text", {}).get("text") == _SCRUBBED_REPLY_TEXT for b in sections):
+                continue
+            _replace_or_delete(
+                client, channel, ts,
+                [{"type": "section", "text": {"type": "mrkdwn", "text": _SCRUBBED_REPLY_TEXT}}],
+                "Modmail message (content removed)",
+            )
+        cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+        if not cursor:
+            return
+
+
+def _scrub_conv_thread(client: Any, feed: Feed, channel: str, conv_id: str) -> None:
+    """Remove a conversation's content from its Slack card, its thread and the store."""
+    reddit = feed.reddit
+    entry = reddit.get_conv_info(channel, conv_id)
+    ts = entry.get("slack_ts")
+    if ts:
+        try:
+            live = _live_blocks(client, channel, ts)
+            if live is not None:
+                _replace_or_delete(client, channel, ts, _scrubbed_conv_card(reddit, live, conv_id, entry), "Modmail conversation (content removed)")
+            _scrub_conv_replies(client, channel, ts)
+        except Exception as e:
+            if not reddit.record_scrub_failure(reddit.KIND_MAIL, channel, conv_id):
+                logging.warning(f"Could not scrub thread for conv {conv_id} ({feed.label}), will retry: {e}")
+                return
+            logging.error(f"Giving up on the Slack thread for conv {conv_id} ({feed.label}); its content is still in Slack: {e}")
+    reddit.scrub_conv(channel, conv_id)
+    logging.info(f"Scrubbed modmail conv {conv_id} ({feed.label})")
+
+
+def _scrub_due_content(web_client: SlackWebClient, feed: Feed) -> int:
+    """Remove content that Reddit's rules say must not be kept, for one feed.
+
+    Two things are due: anything deleted on Reddit, straight away, and
+    anything closed for ``CONTENT_RETENTION_DAYS``. Deleted items go first.
+
+    Returns:
+        How many entries were scrubbed this pass.
+    """
+    reddit = feed.reddit
+    done = 0
+    if feed.modqueue_channel:
+        try:
+            reddit.note_deletions(feed.modqueue_channel)
+        except Exception as e:
+            # An install that predates the op, or an outage. The retention
+            # pass below does not depend on it.
+            logging.warning(f"Could not read deletions ({feed.label}): {e}")
+        for item_id in reddit.items_to_scrub(feed.modqueue_channel, _SCRUB_BATCH):
+            _scrub_item_card(web_client, feed, feed.modqueue_channel, item_id)
+            done += 1
+    if feed.modmail_channel and done < _SCRUB_BATCH:
+        for conv_id in reddit.convs_to_scrub(feed.modmail_channel, _SCRUB_BATCH - done):
+            _scrub_conv_thread(web_client, feed, feed.modmail_channel, conv_id)
+            done += 1
+    return done
+
+
 def _poll_feed(web_client: SlackWebClient, feed: Feed, poll_interval: int) -> Tuple[bool, bool]:
     """Run one poll pass for a single feed.
 
@@ -2758,6 +2940,12 @@ def _poll_feed(web_client: SlackWebClient, feed: Feed, poll_interval: int) -> Tu
     except Exception as e:
         server_error = server_error or _is_server_error(e)
         logging.error(f"Poller error (modmail archive sync, {feed.label}): {e}")
+
+    try:
+        _scrub_due_content(web_client, feed)
+    except Exception as e:
+        server_error = server_error or _is_server_error(e)
+        logging.error(f"Poller error (content retention, {feed.label}): {e}")
 
     return modqueue_changed or modmail_changed, server_error
 

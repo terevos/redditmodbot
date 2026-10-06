@@ -111,7 +111,7 @@ class DevvitReddit:
 
         Args:
             url: The install's external root, as the app reports it — e.g.
-                ``https://redditmodbot-2th52-external.devvit.net/external/``.
+                ``https://reformedautomodv2-2th52-external.devvit.net/external/``.
             token: A managed app token (``devvit_at_…``) from the app's
                 Developer Settings.
             session: Anything with ``requests.Session``'s ``post``. Tests pass
@@ -489,3 +489,17 @@ class Subreddit:
     def moderator(self) -> List[Redditor]:
         """Return the subreddit's moderators."""
         return [Redditor(name) for name in self._reddit.call("moderators").get("names", [])]
+
+    def deletions(self, since: int = 0) -> Dict[str, Any]:
+        """Return the posts and comments deleted since *since* (unix ms).
+
+        ``{"ids": [...], "cursor": int, "more": bool}`` — bare IDs oldest
+        first, and the cursor to pass back next time. Not a PRAW surface: PRAW
+        had no such listing, and the bot never removed what was deleted.
+        """
+        result = self._reddit.call("deletions", since=since)
+        return {
+            "ids": [str(i) for i in result.get("ids", [])],
+            "cursor": int(result.get("cursor", since) or since),
+            "more": bool(result.get("more")),
+        }

@@ -20,7 +20,9 @@
   "triggers": {
     "onAppInstall": "/internal/on/app/install",
     "onAppUpgrade": "/internal/on/app/upgrade",
-    "onModAction": "/internal/on/mod-action"
+    "onModAction": "/internal/on/mod-action",
+    "onPostDelete": "/internal/on/post-delete",
+    "onCommentDelete": "/internal/on/comment-delete"
   },
   "menu": {
     "items": [

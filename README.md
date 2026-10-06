@@ -1,4 +1,4 @@
-# RedditModBot
+# ReformedBot
 
 A Slack bot that surfaces Reddit moderation activity directly in Slack, so mods can discuss and triage it there rather than in the Reddit modqueue.
 
@@ -261,12 +261,39 @@ label.
 Once a week the bot writes both logs to `logs/<subreddit>/export/` as JSON, in
 the same shape the old log files had, and keeps the newest 52 of each — a year
 of weekly snapshots. They are the readable, greppable copy of a database that is
-otherwise binary, and are re-importable if the database is ever lost. The
+otherwise binary. Exports and archives hold the moderation record only, never
+content (see [Content retention](#content-retention)), so a database rebuilt
+from one has every card's number, votes and status but not its text or author. The
 schedule is stored in the database, so restarting the bot does not restart it;
 a brand-new store exports on its first poll.
 
 An export holds the *live* store, so cycles already archived are not in it —
 the archive files are the rest of the history.
+
+### Content retention
+
+Reddit requires that a copy of a post or comment goes when the original is
+deleted, and that nothing identifying a deleted account is kept. The bot does
+both without being asked:
+
+- **Deleted on Reddit** — the Devvit app records each deletion and the bot
+  reads the list every poll. The card for a deleted item has its text, author
+  and title replaced by *Deleted on Reddit — content removed*, open or closed.
+  A moderator's removal is not a deletion and changes nothing here.
+- **Closed for 30 days** — the card's content is replaced by *Content removed
+  30 days after closing*. For modmail that covers the subject, the usernames,
+  and the text of every reply in the thread. Reddit sends no event for a deleted
+  account, so this limit is what guarantees one leaves nothing behind.
+
+A scrubbed card keeps its number, link, votes, status and controls, and the
+database keeps the same record. Open cards are never scrubbed for age. A card
+that is re-opened and rebuilt from Reddit is scrubbed again 30 days after it is
+next closed.
+
+Scrubbing is irreversible and is rationed to a few cards per poll, so the first
+start after upgrading works through every card closed more than 30 days ago
+over the following hours. On that start the bot also rewrites the existing
+export, archive and older JSON log files without their content.
 
 ### Entry structure
 

@@ -68,7 +68,7 @@ Handlers that do their work off-thread (`handle_cast_vote`, `_check_queue_clear_
 
 **"Has blocks" no longer means "is a card."** The status message carries blocks of its own now that it has a button, so a test asking what a poll posted uses `FakeSlackClient.cards()`, which tells them apart by the `_STATUS_SIGNATURE` footer. Filtering `slack.posted` on `p["blocks"]` counts the status message as a card and fails.
 
-Anything that touches a feed needs the `feed` fixture from `conftest.py`: it installs a single resolved `Feed` on the listener (`L.feeds`) wired to the fakes, standing in for what `_startup()` builds. `actions_feed` is the same feed switched to `CONTROLS = actions`. `tests/test_feeds.py` covers config parsing and the two-subreddit case; `tests/test_controls.py` covers which controls a card gets and the handlers behind them; `tests/test_archive.py` covers the per-subreddit layout, the numbering counters, and rollover — it fast-forwards the counter rather than posting 999 items; `tests/test_store.py` covers the store itself: entry round-tripping (including fields with no column), row-level writes, the JSON imports, the export schedule, and two concurrency tests that would have caught the vote-clobbering bug the JSON logs had.
+Anything that touches a feed needs the `feed` fixture from `conftest.py`: it installs a single resolved `Feed` on the listener (`L.feeds`) wired to the fakes, standing in for what `_startup()` builds. `actions_feed` is the same feed switched to `CONTROLS = actions`. `tests/test_feeds.py` covers config parsing and the two-subreddit case; `tests/test_controls.py` covers which controls a card gets and the handlers behind them; `tests/test_archive.py` covers the per-subreddit layout, the numbering counters, and rollover — it fast-forwards the counter rather than posting 999 items; `tests/test_retention.py` covers content retention — the deletion and 30-day scrubs of cards, threads, the store and the files; `tests/test_store.py` covers the store itself: entry round-tripping (including fields with no column), row-level writes, the JSON imports, the export schedule, and two concurrency tests that would have caught the vote-clobbering bug the JSON logs had.
 
 ## Architecture
 
@@ -93,7 +93,7 @@ Things that are different from PRAW, and bite if forgotten:
 - **Objects are lazy, like PRAW's.** `reddit.comment(id=…)` makes no request until an attribute is read; a listed modmail conversation has no `mod_actions` until read, which is the per-conversation request `sync_archived_conversations` is written to avoid.
 - **User reports carry no counts.** Devvit gives report reasons only, so every `user_reports` entry is `(reason, 1)`.
 - **Failures are `DevvitError`; a 5xx is `ServerError`**, which `_is_server_error` recognises by status and by name. The app answers 502 for anything Reddit throws, so a Reddit outage still shortens the next poll.
-- **Only `ENABLED_OPS` run.** Devvit's Reddit permission is all-or-nothing, so the app narrows itself: `routeRpc` refuses any op not in `ENABLED_OPS` (`ops.ts`) — the reads plus modmail archive/unarchive. Every op that posts, comments, removes, bans or messages is still written but answers 400 "disabled in this app"; reviving a dormant control means adding its op there and re-uploading.
+- **Only `ENABLED_OPS` run.** Devvit's Reddit permission is all-or-nothing, so the app narrows itself: `routeRpc` refuses any op not in `ENABLED_OPS` (`ops.ts`) — the reads (the `deletions` list among them) plus modmail archive/unarchive. Every op that posts, comments, removes, bans or messages is still written but answers 400 "disabled in this app"; reviving a dormant control means adding its op there and re-uploading.
 - **Rate limit: 5 requests/second per install.** `DevvitReddit.call` spaces calls under one lock, shared by the poll thread and the Slack handlers.
 - **External endpoints are experimental and limited-access** on Devvit; the `rpc` endpoint is declared with `"scopes": ["global"]`, which is what admits a long-lived managed token.
 
@@ -200,9 +200,29 @@ The database is the state; the exports are the readable copy of it. `maybe_expor
 - **The stamp lives in the database** (`meta.last_export_at`), so the schedule survives a restart rather than starting over each time the bot comes up. A store with no stamp exports on its first poll — deliberately: that is the baseline copy.
 - **A failed export is not a failed poll.** `maybe_export()` logs and returns `[]`, and the stamp is only written after a successful export, so the next poll tries again.
 - **An export is a snapshot of the *live* store**, so it does not contain cycles that have already been archived. Archives plus exports are the full history; exports alone are not.
+- **Neither holds content.** Both are written through `_scrubbed_log()` / `scrubbed_entry()` (see [Content retention](#content-retention)), so a store rebuilt from one has the record but no text or author.
 - Each export is also where the WAL is checkpointed back into the `.db` file, so the database beside them is a complete copy rather than half a state.
 
 **`adopt_legacy_logs()` handles the upgrade from the JSON era.** Two layouts came before the store and both are read, newest first: the per-subreddit `logs/<subreddit>/modqueue.json`, then the shared `logs/modqueue.json` keyed by channel and written by every feed at once. On the first pass over a resolved channel — in `_startup()`, and again in `_poll_feed()` for a channel that only resolved later — the feed imports that channel's slice and the store records the channel as known. **That record is the guard**: without it a second pass would resurrect entries a rollover has since archived, which is why a channel is marked even when there was nothing to import. `counters.json` comes across too, or a bot that had already rolled over would renumber from a carried-over entry near the cap. The JSON files are left where they are — another feed's channels may still be in them, and they are the fallback if the import ever has to be redone.
+
+### Content retention
+
+Reddit's rules for apps require that a copy of a post or comment goes when the original is deleted, and that nothing identifying a deleted account is kept — in the app, and in anything outside it. Here the copies are all outside: the Slack cards, the store, and the JSON files. **Scrubbing** an entry removes the content (body, title, subject, author, the title slug in the permalink) and keeps the record (number, ID, link, votes, status, who resolved it).
+
+Two things make an entry due, and `_scrub_due_content()` — the last phase of `_poll_feed()` — handles both:
+
+- **Deleted on Reddit.** The app's `onPostDelete` / `onCommentDelete` triggers add the bare ID to a Redis sorted set (`deletions.ts`), scored by time and trimmed at 30 days. The bot reads it through the `deletions` op with a cursor kept in `meta.deletions_cursor`; `note_deletions()` only *flags* the entries it holds (`deleted_at`), and the scrub pass picks flagged entries first. A deletion applies to open cards too. **A moderator's removal fires the same trigger and is not a deletion** — `deletedId()` drops `source === MODERATOR`, or every removed post would lose its card while the mods are still discussing it.
+- **Closed for `CONTENT_RETENTION_DAYS` (30).** Devvit has no account-deletion trigger and modmail has no deletion events at all, so the window is what covers both. Open entries are never scrubbed for age.
+
+Things that are easy to get wrong:
+
+- **Slack first, store second.** `scrubbed_at` is only written once the card has been edited, so a failed edit is retried next poll. `record_scrub_failure()` counts attempts and gives up at `_SCRUB_GIVE_UP` (20), scrubbing the store anyway and logging an error — one card Slack will not release must not block the queue behind it. An edit Slack refuses for good (`_UNEDITABLE_ERRORS`) becomes a delete.
+- **`_SCRUB_BATCH` (5) entries per feed per poll.** The first poll after an upgrade finds every card ever closed waiting; unrationed, that is a burst into Slack's rate limit.
+- **The author's name is also in the control values.** `mail|<conv>|<author>` and the dormant dropdown's `…|<author>` are invisible on the card and still the name sitting in Slack; `without_author_in_controls()` empties it and keeps the shape so the handlers still parse the value.
+- **A modmail reply is told from a thread note by its blocks.** Replies carrying message text are the bot's own posts with a `section` block; notes ("Archived on Reddit by …") are plain text and are left alone.
+- **`clear_done()` drops `scrubbed_at`.** A reopened card may be rebuilt from Reddit, content and all, so it is due again 30 days after it is next closed. `deleted_at` is permanent, so a deleted item that is reopened is scrubbed again on the next poll.
+- **`scrubbed_at` and `deleted_at` live in `extra`**, not in columns; `store.items_to_scrub()` / `convs_to_scrub()` read them with `json_extract`.
+- **Files never hold content.** Exports and archives are written scrubbed; `scrub_log_files()` runs in `_startup()` — after `adopt_legacy_logs()`, the one reader that wanted what they held — and rewrites anything written before this, the shared legacy logs in the log root included.
 
 ### Done-state
 

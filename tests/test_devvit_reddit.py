@@ -153,7 +153,7 @@ def test_calls_are_spaced_to_stay_under_the_rate_limit(reddit: D.DevvitReddit, m
 
 
 def test_served_subreddit_reports_what_the_install_says(reddit: D.DevvitReddit, app: FakeApp) -> None:
-    app.answers["info"] = {"subreddit": "reformed", "app": "redditmodbot", "version": "0.0.1"}
+    app.answers["info"] = {"subreddit": "reformed", "app": "reformedautomodv2", "version": "0.0.1"}
     assert reddit.served_subreddit() == "reformed"
 
 

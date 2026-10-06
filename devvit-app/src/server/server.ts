@@ -1,11 +1,14 @@
 import {once} from 'node:events'
 import type {IncomingMessage, ServerResponse} from 'node:http'
 import type {
+  OnCommentDeleteRequest,
   OnModActionRequest,
+  OnPostDeleteRequest,
   PartialJsonValue,
   TriggerResponse,
   UiResponse,
 } from '@devvit/web/shared'
+import {recordDeletion} from './deletions.ts'
 import {BadRequest, ENABLED_OPS, externalUrl, ops} from './ops.ts'
 import {recordModAction} from './resolutions.ts'
 import type {RpcError, RpcRequest} from './wire.ts'
@@ -16,6 +19,8 @@ import type {RpcError, RpcRequest} from './wire.ts'
 const Route = {
   Rpc: '/external/rpc',
   OnModAction: '/internal/on/mod-action',
+  OnPostDelete: '/internal/on/post-delete',
+  OnCommentDelete: '/internal/on/comment-delete',
   OnAppInstall: '/internal/on/app/install',
   OnAppUpgrade: '/internal/on/app/upgrade',
   MenuEndpointUrl: '/internal/menu/endpoint-url',
@@ -55,6 +60,13 @@ async function route(
       return
     case Route.OnModAction:
       await recordModAction(await readJson<OnModActionRequest>(reqMsg))
+      writeJson<TriggerResponse>(200, {}, rspMsg)
+      return
+    case Route.OnPostDelete:
+    case Route.OnCommentDelete:
+      await recordDeletion(
+        await readJson<OnPostDeleteRequest | OnCommentDeleteRequest>(reqMsg),
+      )
       writeJson<TriggerResponse>(200, {}, rspMsg)
       return
     case Route.OnAppInstall:

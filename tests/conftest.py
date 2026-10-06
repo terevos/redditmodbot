@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -111,6 +111,15 @@ class FakeSlackClient:
             ]}
         blocks = self.history.get(latest)
         return {"messages": [{"blocks": blocks}] if blocks is not None else []}
+
+    def conversations_replies(self, channel: str, ts: str, limit: int = 200, cursor: Optional[str] = None) -> Dict[str, Any]:
+        """Serve a thread: the parent, then everything posted under it."""
+        gone = {d["ts"] for d in self.deleted}
+        thread = [p for p in self.posted if p["channel"] == channel and (p["ts"] == ts or p["thread_ts"] == ts) and p["ts"] not in gone]
+        return {"messages": [
+            {"ts": p["ts"], "text": p["text"], "blocks": self.history.get(p["ts"], p["blocks"]), "bot_id": p.get("bot_id")}
+            for p in thread
+        ]}
 
     def seed_message(self, ts: str, blocks: List[Dict[str, Any]]) -> None:
         """Pretend a message with *blocks* already exists at *ts*."""
@@ -319,6 +328,7 @@ class FakeSubreddit:
         self.moderators: List[str] = []
         self.removal_reasons: List[Any] = []  # sub.mod.removal_reasons
         self.display_name = "reformed"
+        self.deleted: List[Tuple[int, str]] = []  # (unix ms, bare id), as the app records them
         # approve_item reaches back through the subreddit to fetch the item.
         self._reddit = reddit
 
@@ -329,6 +339,11 @@ class FakeSubreddit:
     def moderator(self) -> List[FakeRedditor]:
         """Return the subreddit's moderators, as ``sub.moderator()`` does."""
         return [FakeRedditor(name) for name in self.moderators]
+
+    def deletions(self, since: int = 0) -> Dict[str, Any]:
+        """Serve the deletions recorded after *since*, as the app's op does."""
+        found = [(at, item_id) for at, item_id in self.deleted if at > since]
+        return {"ids": [i for _, i in found], "cursor": max([at for at, _ in found], default=since), "more": False}
 
 
 class FakeReddit:

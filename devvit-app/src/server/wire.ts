@@ -87,3 +87,13 @@ export type Resolution = {
   /** Unix seconds. */
   at: number
 }
+
+/** Posts and comments deleted since the caller last asked. */
+export type Deletions = {
+  /** Bare IDs, oldest deletion first. */
+  ids: string[]
+  /** Pass back as `since` next time. Unix milliseconds. */
+  cursor: number
+  /** True when this was a full page and there is more to read. */
+  more: boolean
+}

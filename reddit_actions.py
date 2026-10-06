@@ -198,6 +198,9 @@ class RedditActions:
         # resolution hunt over rather than inheriting a stale answer.
         for key in ("done_action", "done_checks", "done_by", "done_note_ts"):
             entry.pop(key, None)
+        # A reopened card may have been rebuilt from Reddit, content and all,
+        # so it is due a scrub again once it has been closed long enough.
+        entry.pop("scrubbed_at", None)
 
     def is_mod(self, username: str) -> bool:
         """Return True if *username* moderates this instance's subreddit.
@@ -2384,7 +2387,8 @@ class RedditActions:
             "channel":     channel,
             "cycle":       cycle,
             "archived_at": now,
-            "entries":     snapshot,
+            # Without content: the archive is the record, not a copy of Reddit.
+            "entries":     {k: self.scrubbed_entry(kind, v, self.SCRUB_FILE) for k, v in snapshot.items()},
         })
 
         if is_queue:
@@ -2403,6 +2407,308 @@ class RedditActions:
             f"archived {len(snapshot)} entr(ies) to {path}, {len(keep)} carried forward"
         )
         return keep
+
+    # ------------------------------------------------------------------
+    # Content retention
+    #
+    # Reddit's rules for apps: a copy of a post or comment goes when the
+    # original is deleted, and nothing identifying its author outlives a
+    # deleted account. There is no event for an account deletion, so the second
+    # is met by not keeping content at all past CONTENT_RETENTION_DAYS after a
+    # card is closed. "Scrubbing" an entry removes the content and the author
+    # and keeps the record: its number, votes, status and who resolved it.
+    # ------------------------------------------------------------------
+
+    CONTENT_RETENTION_DAYS: float = 30
+    SCRUB_DELETED: str = "deleted"
+    SCRUB_EXPIRED: str = "expired"
+    SCRUB_FILE: str = "file"
+    _SCRUB_NOTICES: Dict[str, str] = {
+        "deleted": "_Deleted on Reddit — content removed._",
+        "expired": "_Content removed 30 days after closing._",
+        "file":    "_Content is not kept in this file._",
+    }
+    # Slack attempts before an entry's stored copy is scrubbed regardless, so
+    # one card Slack will not let go of cannot hold up the rest forever.
+    _SCRUB_GIVE_UP: int = 20
+    _DELETIONS_CURSOR_KEY: str = "deletions_cursor"
+    # Pages of deletions read per poll; a long outage is caught up over several.
+    _DELETIONS_MAX_PAGES: int = 10
+
+    @property
+    def content_retention(self) -> float:
+        """Seconds a closed entry keeps its content."""
+        return self.CONTENT_RETENTION_DAYS * 24 * 3600
+
+    @classmethod
+    def scrub_notice(cls, reason: str) -> str:
+        """Return the line that stands where an entry's content was."""
+        return cls._SCRUB_NOTICES.get(reason, cls._SCRUB_NOTICES[cls.SCRUB_EXPIRED])
+
+    @staticmethod
+    def strip_slug(link: str) -> str:
+        """Return a Reddit permalink without the words of the post's title.
+
+        ``…/comments/abc/some_title_here/def`` carries the title in its path;
+        ``…/comments/abc/_/def`` reaches the same place without it.
+        """
+        return re.sub(r'(/comments/[^/]+/)[^/]+(/|$)', r'\1_\2', link or "")
+
+    @staticmethod
+    def without_author_in_controls(block: Dict[str, Any], author: str) -> Dict[str, Any]:
+        """Return an ``actions`` *block* whose control values no longer name *author*.
+
+        A control's value ends ``…|<author>`` — invisible on the card, but it is
+        the author's name sitting in Slack all the same. The value keeps its
+        shape with the name emptied, so the handlers still parse it.
+        """
+        if block.get("type") != "actions" or not author:
+            return block
+        suffix = f"|{author}"
+
+        def clean(node: Any) -> Any:
+            if isinstance(node, list):
+                return [clean(n) for n in node]
+            if not isinstance(node, dict):
+                return node
+            out = {k: clean(v) for k, v in node.items()}
+            value = out.get("value")
+            if isinstance(value, str) and value.endswith(suffix):
+                out["value"] = value[:-len(author)]
+            return out
+
+        return clean(block)
+
+    @classmethod
+    def scrubbed_item_blocks(cls, blocks: List[Dict[str, Any]], entry: Dict[str, Any], reason: str) -> List[Dict[str, Any]]:
+        """Return a modqueue card's *blocks* with the content and author removed.
+
+        The header loses its ``by u/…``, the detail section is replaced by a
+        link and a notice, and everything else — tally, controls, DONE marker —
+        is carried over, so a scrubbed card behaves exactly as it did.
+
+        Args:
+            blocks: The card as it stands.
+            entry: Its log entry, for the link and the author's name.
+            reason: One of the ``SCRUB_*`` reasons, which picks the notice.
+        """
+        author = str(entry.get("author") or "")
+        link = cls.strip_slug(str(entry.get("report_link") or ""))
+        notice = cls.scrub_notice(reason)
+        detail = {"type": "section", "text": {"type": "mrkdwn", "text": f"<{link}|View on Reddit>\n{notice}" if link else notice}}
+        out: List[Dict[str, Any]] = []
+        replaced = False
+        for block in blocks:
+            if block.get("type") == "header":
+                text = str(block.get("text", {}).get("text", ""))
+                named = f" by u/{author}"
+                text = text.replace(named, "", 1) if author and named in text else re.sub(r' by u/\S+', '', text, count=1)
+                out.append(cls.header_block(text))
+            elif block.get("type") == "section" and not block.get("block_id") and not cls.is_done_marker(block):
+                # The detail section, and any other free-text section an older
+                # card layout carried: one notice replaces them all.
+                if not replaced:
+                    out.append(detail)
+                    replaced = True
+            else:
+                out.append(cls.without_author_in_controls(block, author))
+        return out
+
+    @classmethod
+    def scrubbed_conv_header(cls, text: str, entry: Dict[str, Any]) -> str:
+        """Return a modmail card's header *text* without the author and subject.
+
+        Keeps the letter and whatever status followed the title.
+        """
+        old = cls.conv_title(entry.get("conv_num"), str(entry.get("author") or ""), str(entry.get("subject") or ""))
+        new = cls.conv_title(entry.get("conv_num"))
+        if text.startswith(old):
+            return cls._fit_header(new + text[len(old):])
+        # The title was trimmed to make room for a status, so the status is
+        # the last part; a card with no status has only its title.
+        status = text.rsplit(cls.HEADER_SEP, 1)[-1] if cls.HEADER_SEP in text and (cls.is_done(entry) or cls.REOPENED_STATUS in text) else ""
+        return cls.header_text(new, status)
+
+    @classmethod
+    def scrubbed_entry(cls, kind: str, entry: Any, reason: str) -> Any:
+        """Return a copy of a log *entry* without content or author.
+
+        What the archive and export files hold, and what a scrub leaves in the
+        store. Anything that is not a dict is returned as it is.
+        """
+        if not isinstance(entry, dict):
+            return entry
+        out = dict(entry)
+        if kind == cls.KIND_QUEUE:
+            blocks = out.get("slack_blocks")
+            if isinstance(blocks, list) and not out.get("scrubbed_at"):
+                out["slack_blocks"] = cls.scrubbed_item_blocks(blocks, entry, reason)
+            if out.get("report_link"):
+                out["report_link"] = cls.strip_slug(str(out["report_link"]))
+        else:
+            out.pop("subject", None)
+        out.pop("author", None)
+        return out
+
+    def _scrubbed_log(self, kind: str, data: Any) -> Any:
+        """Return a whole log — export, archive or legacy JSON — without content."""
+        if not isinstance(data, dict):
+            return data
+
+        def entries(found: Any) -> Any:
+            if not isinstance(found, dict):
+                return found
+            return {key: self.scrubbed_entry(kind, value, self.SCRUB_FILE) for key, value in found.items()}
+
+        if "archived_at" in data and "entries" in data:
+            return {**data, "entries": entries(data["entries"])}
+        out: Dict[str, Any] = {}
+        for channel, payload in data.items():
+            if kind == self.KIND_QUEUE:
+                out[channel] = entries(payload)
+            elif isinstance(payload, dict) and "modmail_conv" in payload:
+                out[channel] = {**payload, "modmail_conv": entries(payload["modmail_conv"])}
+            else:
+                out[channel] = payload
+        return out
+
+    def scrub_log_files(self) -> List[str]:
+        """Remove content from every JSON file this subreddit has written.
+
+        Exports and archives are written without content now; this is for the
+        ones written before that, and for the older JSON logs the store was
+        imported from, including the shared ones in the log root. Idempotent —
+        a file with nothing to remove is not rewritten.
+
+        Returns:
+            The paths rewritten.
+        """
+        candidates: List[Tuple[str, str]] = []
+        for kind, name in ((self.KIND_QUEUE, self._QUEUE_LOG_NAME), (self.KIND_MAIL, self._MAIL_LOG_NAME)):
+            candidates += [(kind, os.path.join(self.sub_log_dir, name)), (kind, os.path.join(self.log_dir, name))]
+            for folder in (self.archive_dir, self.export_dir):
+                if os.path.isdir(folder):
+                    candidates += [
+                        (kind, os.path.join(folder, f))
+                        for f in sorted(os.listdir(folder))
+                        if f.startswith(f"{kind}-") and f.endswith(".json")
+                    ]
+        rewritten: List[str] = []
+        for kind, path in candidates:
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                scrubbed = self._scrubbed_log(kind, data)
+                if scrubbed != data:
+                    self._write_log(path, scrubbed)
+                    rewritten.append(path)
+            except (ValueError, OSError) as e:
+                logging.error(f"Could not scrub {path} for r/{self.subreddit_name}: {e}")
+        if rewritten:
+            logging.info(f"Removed content from {len(rewritten)} log file(s) for r/{self.subreddit_name}")
+        return rewritten
+
+    def note_deletions(self, channel: str, now: Optional[float] = None) -> int:
+        """Ask the app what was deleted on Reddit and flag the items held here.
+
+        Only flags: ``deleted_at`` on the entry is what puts it at the front of
+        :meth:`items_to_scrub`, and the scrub itself is the listener's, since
+        it has to edit the Slack card. The cursor is in the store, so a restart
+        does not re-read or skip anything.
+
+        Args:
+            channel: This feed's modqueue channel.
+            now: Timestamp to record; defaults to the current time.
+
+        Returns:
+            How many held items were newly flagged.
+        """
+        now = time.time() if now is None else now
+        flagged = 0
+        for _ in range(self._DELETIONS_MAX_PAGES):
+            try:
+                since = int(float(self.store.get_meta(self._DELETIONS_CURSOR_KEY) or 0))
+            except ValueError:
+                since = 0
+            page = self.sub.deletions(since=since)
+            for item_id in page.get("ids", []):
+                # Most deletions are of things that never reached the modqueue.
+                if not self.store.item(channel, item_id):
+                    continue
+                with self.store.edit_item(channel, item_id) as entry:
+                    if entry is not None and not entry.get("deleted_at"):
+                        entry["deleted_at"] = now
+                        flagged += 1
+            cursor = int(page.get("cursor", since) or since)
+            if cursor > since:
+                self.store.set_meta(self._DELETIONS_CURSOR_KEY, str(cursor))
+            if not page.get("more") or cursor <= since:
+                break
+        return flagged
+
+    def items_to_scrub(self, channel: str, limit: int, now: Optional[float] = None) -> List[str]:
+        """Return up to *limit* item IDs in *channel* whose content is due to go."""
+        now = time.time() if now is None else now
+        return self.store.items_to_scrub(channel, now - self.content_retention, limit)
+
+    def convs_to_scrub(self, channel: str, limit: int, now: Optional[float] = None) -> List[str]:
+        """Return up to *limit* conversation IDs in *channel* whose content is due to go."""
+        now = time.time() if now is None else now
+        return self.store.convs_to_scrub(channel, now - self.content_retention, limit)
+
+    def scrub_reason(self, entry: Dict[str, Any]) -> str:
+        """Return why *entry* is being scrubbed: deleted on Reddit, or simply old."""
+        return self.SCRUB_DELETED if entry.get("deleted_at") else self.SCRUB_EXPIRED
+
+    def scrub_item(self, channel: str, item_id: str, blocks: Optional[List[Dict[str, Any]]] = None, now: Optional[float] = None) -> None:
+        """Remove an item's content and author from the store.
+
+        Args:
+            channel: Slack channel ID.
+            item_id: Reddit item ID (bare).
+            blocks: The card as it now stands in Slack, already scrubbed. With
+                none — the message is gone — the cached copy is scrubbed instead.
+            now: Timestamp to record; defaults to the current time.
+        """
+        with self.store.edit_item(channel, item_id) as entry:
+            if entry is None:
+                return
+            scrubbed = self.scrubbed_entry(self.KIND_QUEUE, entry, self.scrub_reason(entry))
+            if blocks is not None:
+                scrubbed["slack_blocks"] = blocks
+            scrubbed["scrubbed_at"] = time.time() if now is None else now
+            scrubbed.pop("scrub_failures", None)
+            entry.clear()
+            entry.update(scrubbed)
+
+    def scrub_conv(self, channel: str, conv_id: str, now: Optional[float] = None) -> None:
+        """Remove a conversation's subject and author from the store."""
+        with self.store.edit_conv(channel, conv_id) as entry:
+            if entry is None:
+                return
+            scrubbed = self.scrubbed_entry(self.KIND_MAIL, entry, self.SCRUB_EXPIRED)
+            scrubbed["scrubbed_at"] = time.time() if now is None else now
+            scrubbed.pop("scrub_failures", None)
+            # The message IDs are not part of an edit; see edit_conv.
+            scrubbed.pop("messages", None)
+            entry.clear()
+            entry.update(scrubbed)
+
+    def record_scrub_failure(self, kind: str, channel: str, entry_id: str) -> bool:
+        """Count a failed attempt to scrub an entry's Slack messages.
+
+        Returns:
+            True once it has failed :attr:`_SCRUB_GIVE_UP` times, which is the
+            caller's cue to scrub the stored copy anyway.
+        """
+        edit = self.store.edit_item if kind == self.KIND_QUEUE else self.store.edit_conv
+        with edit(channel, entry_id) as entry:
+            if entry is None:
+                return True
+            entry["scrub_failures"] = _as_int(entry.get("scrub_failures")) + 1
+            return entry["scrub_failures"] >= self._SCRUB_GIVE_UP
 
     # ------------------------------------------------------------------
     # Exports
@@ -2468,7 +2774,7 @@ class RedditActions:
             (self.KIND_MAIL, self.get_modmail_file()),
         ):
             path = os.path.join(self.export_dir, f"{name}-{stamp}.json")
-            self._write_log(path, snapshot)
+            self._write_log(path, self._scrubbed_log(name, snapshot))
             written.append(path)
         logging.info(f"Exported r/{self.subreddit_name} logs to {self.export_dir}")
         return written

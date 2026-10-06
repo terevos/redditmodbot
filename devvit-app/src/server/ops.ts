@@ -12,6 +12,7 @@ import {
   type Post,
   reddit,
 } from '@devvit/web/server'
+import {deletionsSince} from './deletions.ts'
 import {bareId, getResolution} from './resolutions.ts'
 import type {
   ModmailAction,
@@ -158,6 +159,7 @@ export const ENABLED_OPS: ReadonlySet<string> = new Set([
   'modmail_conversation',
   'modmail_archive',
   'modmail_unarchive',
+  'deletions',
 ])
 
 export const ops: {[name: string]: Op} = {
@@ -170,6 +172,11 @@ export const ops: {[name: string]: Op} = {
       version: context.appVersion,
       external_url: await externalUrl(),
     }
+  },
+
+  /** Posts and comments deleted since `since`, for the bot to scrub. */
+  async deletions(args) {
+    return deletionsSince(optNum(args, 'since') ?? 0)
   },
 
   async moderators() {
